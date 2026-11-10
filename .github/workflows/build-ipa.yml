@@ -1,0 +1,52 @@
+name: Build IPA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Instalar dependências
+        run: |
+          npm install --legacy-peer-deps
+          npm install --legacy-peer-deps expo-clipboard@sdk-57 || npm install --legacy-peer-deps expo-clipboard@~57.0.0 || npx expo install expo-clipboard || true
+          node -e "require.resolve('expo-clipboard'); console.log('expo-clipboard OK')"
+          npm ls expo-clipboard --depth=0 || true
+
+      - name: Gerar projeto iOS
+        run: npx expo prebuild --platform ios --clean
+
+      - name: Mostrar versão do Xcode
+        run: xcodebuild -version
+
+      - name: Compilar (sem assinatura)
+        run: |
+          xcodebuild \
+            -workspace ios/Cerebro.xcworkspace \
+            -scheme Cerebro \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Empacotar .ipa
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/Cerebro.app Payload/
+          zip -r Cerebro.ipa Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Cerebro-ipa
+          path: Cerebro.ipa
