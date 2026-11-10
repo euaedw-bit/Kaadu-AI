@@ -1,0 +1,14 @@
+{
+  "expo": {
+    "name": "Cerebro",
+    "slug": "cerebro",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./icon.png",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.kaadu.cerebro"
+    }
+  }
+}
