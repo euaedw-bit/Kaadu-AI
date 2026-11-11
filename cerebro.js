@@ -82,6 +82,7 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
   let ST = { vivo: {}, hist: {} };   // desempenho das estratégias por circunstância
   let ultResumo = Date.now();
   let eng = novoEstado();
+  const EST_MIN = new Map(); let ENG_T0 = 0; let engReg = 0;
   const ouvintes = new Set();
   const flags = { rep: false, altas: false, reg: false, ult: {} };
   let secaMarcas = new Set();
@@ -443,6 +444,7 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
     const AG = { W: NOMES.map(mkAgg), C: NOMES.map(mkAgg) };
     const ANY = { W: mkAgg(), C: mkAgg() };
     const AGcol = NOMES.map(mkAgg); const ANYcol = mkAgg();
+    const somaMin = new Set();
     const ANYm = { Wa: mkAgg(), Wb: mkAgg(), Wrep: mkAgg(), Wnrep: mkAgg(), Walt: mkAgg(), Wnalt: mkAgg() };
     const branco = (a, b) => { // 1 se tem branco entre minutos a..b; null se incompleto
       if (b > ultMin - 1) return null;
@@ -458,6 +460,7 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
       const colDif = eh && ((H[i - 1].n === 0 && difMin(i - 1)) || (H[i + 1].n === 0 && difMin(i + 1)));
       const v = [red(H[i + 1].n), red(H[i + 2].n), 0, red(H[i - 1].n), red(H[i - 2].n), 0, 0];
       v[2] = v[0] + v[1]; v[5] = v[3] + v[4]; v[6] = v[2] + v[5];
+      if (eh) for (let q = 0; q < 7; q++) if (v[q] > 0) somaMin.add(T + v[q]);
       let anyEx = null, anyTol = null; let completo = true;
       const ag = eh ? (colDif ? AGcol : AG.W) : AG.C;
       for (let q = 0; q < 7; q++) {
@@ -499,6 +502,85 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
     L.push(linhaF('QUALQUER (com tolerância)', ANYcol.tol, ANY.C.tol));
     L.push('   Controle = o MESMO cálculo feito a partir de pedras que não são branco. Se o branco não tem taxa maior que o controle, a soma não ajuda.');
     L.push('   Com 7 horários e tolerância, "cair um branco em algum" acontece quase sempre por sorte: só vale a diferença para o controle.');
+    /* G) sequência de N em N minutos a partir de um branco */
+    L.push('');
+    L.push('G) SEQUÊNCIA DE 3 EM 3 MINUTOS: branco em minuto terminado em 3 ou 9 -> deveria vir branco a cada 3 minutos seguintes (T+3, T+6, T+9...)');
+    const digMin = (m) => new Date(m * MIN).getMinutes() % 10;
+    const b39Min = new Set();
+    for (const M of duplas) { for (let d = 38; d <= 40; d++) b39Min.add(M + d); for (let d = 48; d <= 50; d++) b39Min.add(M + d); }
+    const engMin0 = ENG_T0 ? Math.floor(ENG_T0 / MIN) + 60 : Infinity;
+    const cadeia = (passo, digs, K, deep) => {
+      const novo = () => ({ n: 0, k: Array(K).fill(0), tot: 0, ge: [0, 0, 0, 0, 0], n3: 0, a3: 0, run: 0, recs: [] });
+      const W = novo(), Cc = novo();
+      for (const [m, l] of mm) {
+        if (digs && !digs.includes(digMin(m))) continue;
+        if (l.length < 2 || m + passo * K > ultMin - 1) continue;
+        const eh = l.some((x) => H[x].n === 0);
+        const hits = []; const rc = []; let ok = true;
+        for (let k = 1; k <= K; k++) {
+          const Mt = m + passo * k;
+          const r = branco(Mt, Mt);
+          if (r === null) { ok = false; break; }
+          hits.push(r);
+          if (deep) { const ls = mm.get(Mt); rc.push({ hit: r, Mt, idx: ls ? ls[0] - 1 : -1 }); }
+        }
+        if (!ok) continue;
+        const A = eh ? W : Cc;
+        A.n++; hits.forEach((h, k) => { A.k[k] += h; });
+        const tot = hits.reduce((a, b) => a + b, 0); A.tot += tot;
+        for (let g = 1; g <= 4; g++) if (tot >= g) A.ge[g]++;
+        const any3 = hits.slice(0, 3).some((x) => x) ? 1 : 0;
+        A.n3++; A.a3 += any3;
+        let run = 0; while (run < K && hits[run]) run++; A.run += run;
+        if (deep) { for (const r of rc) A.recs.push(r); if (eh) A.ini = (A.ini || []).concat([{ m, any3, idx: l[0] }]); }
+      }
+      return { W, C: Cc };
+    };
+    const mostrar = (nome, passo, digs, K, deep) => {
+      const { W, C: Cc } = cadeia(passo, digs, K, deep);
+      L.push(`   ${nome}: ${W.n} inícios com branco | ${Cc.n} minutos de controle (sem branco)`);
+      if (!W.n || !Cc.n) return;
+      const ps = [];
+      for (let k = 0; k < K; k++) ps.push(`+${passo * (k + 1)}: ${pc(W.k[k] / W.n)} (ctrl ${pc(Cc.k[k] / Cc.n)}, z=${z2({ n: W.n, h: W.k[k] }, { n: Cc.n, h: Cc.k[k] }).toFixed(1)})`);
+      L.push('     por passo (minutos depois do branco): ' + ps.join(' | '));
+      L.push(`     quantos dos ${K} passos pagaram (média): ${(W.tot / W.n).toFixed(2).replace('.', ',')} | controle ${(Cc.tot / Cc.n).toFixed(2).replace('.', ',')}`);
+      L.push('     ' + [1, 2, 3, 4].map((g) => `${g}+ passos: ${pc(W.ge[g] / W.n)} (ctrl ${pc(Cc.ge[g] / Cc.n)}, z=${z2({ n: W.n, h: W.ge[g] }, { n: Cc.n, h: Cc.ge[g] }).toFixed(1)})`).join(' | '));
+      L.push(`     pelo menos 1 dos 3 primeiros passos: ${fmtSub(W.n3, W.a3)} | controle ${fmtSub(Cc.n3, Cc.a3)} | z=${z2({ n: W.n3, h: W.a3 }, { n: Cc.n3, h: Cc.a3 }).toFixed(1)}`);
+      L.push(`     passos seguidos que pagaram desde o início (média): ${(W.run / W.n).toFixed(2).replace('.', ',')} | controle ${(Cc.run / Cc.n).toFixed(2).replace('.', ',')}`);
+      if (!deep) return;
+      if (W.ini && W.ini.length) {
+        const meio = W.ini[Math.floor(W.ini.length / 2)].m;
+        const sub = (f) => { const a = W.ini.filter(f); return fmtSub(a.length, a.reduce((x, e) => x + e.any3, 0)); };
+        L.push(`     "1+ dos 3 primeiros": metade antiga ${sub((e) => e.m < meio)} | metade recente ${sub((e) => e.m >= meio)}`);
+      }
+      // condições do gráfico e das outras estratégias no horário de cada passo
+      const prep = (R) => R.forEach((r) => {
+        r.c = r.idx >= 1 ? ctxEm(r.idx) : { rep: false, altas: false };
+        const es = new Set(); let tem = false;
+        if (r.Mt >= engMin0) { tem = true; for (let d = -1; d <= 1; d++) { const s = EST_MIN.get(r.Mt + d); if (s) s.forEach((x) => es.add(x)); } }
+        r.es = tem ? es : null; r.soma = somaMin.has(r.Mt); r.j39 = b39Min.has(r.Mt);
+      });
+      prep(W.recs); prep(Cc.recs);
+      const split = (nome, f, so) => {
+        const part = (R) => { const a = { n: 0, h: 0 }, b = { n: 0, h: 0 }; for (const r of R) { if (so && !so(r)) continue; const t = f(r) ? a : b; t.n++; t.h += r.hit; } return [a, b]; };
+        const [wa, wb] = part(W.recs), [ca, cb] = part(Cc.recs);
+        L.push(`     ${nome}: com ${fmtSub(wa.n, wa.h)} (ctrl ${fmtSub(ca.n, ca.h)}, z=${z2(wa, ca).toFixed(1)}) | sem ${fmtSub(wb.n, wb.h)} (ctrl ${fmtSub(cb.n, cb.h)})`);
+      };
+      L.push('     Taxa de pagar em cada passo, conforme as condições NAQUELE horário:');
+      split('repetição no gráfico', (r) => r.c.rep);
+      split('pretas altas no gráfico', (r) => r.c.altas);
+      split('regime (repetição + pretas altas)', (r) => r.c.rep && r.c.altas);
+      split('soma do branco (item F) caindo nesse horário', (r) => r.soma);
+      split('janela dos 39/49 de uma dupla nesse horário', (r) => r.j39);
+      for (const e of ['B39', 'PA', 'BC', 'W']) split(`estratégia ${NOME_EST[e] || 'Wall'} com entrada nesse horário (±1 min)`, (r) => r.es.has(e), (r) => r.es !== null);
+    };
+    mostrar('Passo 3, início só em minuto terminado em 3 ou 9 (regra do dono), seguindo 12 passos (36 min)', 3, [3, 9], 12, true);
+    mostrar('Passo 3, início em qualquer minuto (para ver se 3 e 9 são mesmo especiais)', 3, null, 6, false);
+    mostrar('Passo 4, início em qualquer minuto', 4, null, 6, false);
+    mostrar('Passo 5, início em qualquer minuto', 5, null, 6, false);
+    mostrar('Passo 7, início em qualquer minuto', 7, null, 6, false);
+    L.push('   Controle = minutos com a mesma terminação, mas SEM branco. Só vale se o branco ficar bem acima do controle.');
+    L.push('   As estratégias (B39, PA, BC, Wall) só existem para o período em que o motor rodou (últimas ~3000 pedras + ao vivo).');
     L.push('');
     L.push('   Leitura: "acaso" é o que se esperaria num sorteio puro. Só vale se bater nas duas metades e com z alto');
     L.push('   (z maior que ~3,4 = difícil de ser sorte, já descontando que muitas regras estão sendo testadas).');
@@ -508,6 +590,11 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
   /* ---------- observatório ao vivo: avisa na conversa quando uma regra do dono entra em ação ---------- */
   const ativas = [];
   const somas = [];
+  let seq3 = null;
+  const fimSeq = (q, t) => {
+    const ks = Object.keys(q.hit).map(Number).sort((x, y) => x - y);
+    emitir('resumo', `🔁 Sequência de 3 em 3 do minuto ${hmin(q.T)} terminou: pagou em ${ks.length} dos 12 passos${ks.length ? ` (passos ${ks.join(', ')})` : ''}.`, t);
+  };
   function vivoObs(i) {
     const { n, t } = H[i];
     const m = Math.floor(t / MIN);
@@ -533,6 +620,28 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
       }
     }
     while (somas.length && m - somas[0].Tm > 60) somas.shift();
+    const condAgora = (mm0) => {
+      const c = ctxEm(i);
+      const co = [];
+      for (let d = -1; d <= 1; d++) { const sx = EST_MIN.get(mm0 + d); if (sx) sx.forEach((x) => { const nm = NOME_EST[x] || (x === 'W' ? 'Wall' : null); if (nm && !co.includes(nm)) co.push(nm); }); }
+      if (somas.some((x) => x.alvos.some(([, k]) => x.Tm + k === mm0))) co.push('soma do branco');
+      if (ativas.some((x) => { const d2 = mm0 - x.M; return (d2 >= 38 && d2 <= 40) || (d2 >= 48 && d2 <= 50); })) co.push('janela 39/49');
+      return `repetição: ${c.rep ? 'sim' : 'não'} · pretas altas: ${c.altas ? 'sim' : 'não'} · coincide com: ${co.length ? co.join(', ') : 'nenhuma estratégia'}`;
+    };
+    if (n === 0) {
+      const dg = new Date(m * MIN).getMinutes() % 10;
+      const dk = seq3 ? m - seq3.T : -1;
+      if (seq3 && dk > 0 && dk % 3 === 0 && dk / 3 <= 12) {
+        const k = dk / 3;
+        if (!seq3.hit[k]) { seq3.hit[k] = true; emitir('ok', `✅ Sequência de 3 em 3 (início ${hmin(seq3.T)}): branco no passo ${k} (+${dk}min) às ${hms(t)} · ${condAgora(m)}.`, t); }
+      } else if ((dg === 3 || dg === 9) && !(seq3 && m === seq3.T)) {
+        if (seq3) fimSeq(seq3, t);
+        seq3 = { T: m, hit: {} };
+        const al = [1, 2, 3, 4, 5, 6].map((k) => hmin(m + 3 * k)).join(', ');
+        emitir('estrat', `🔁 Branco no minuto ${hmin(m)} (final ${dg}): sequência de 3 em 3 minutos começa. Próximos horários: ${al}... (acompanho até 12 passos).`, t);
+      }
+    }
+    if (seq3 && m > seq3.T + 3 * 12 + 1) { fimSeq(seq3, t); seq3 = null; }
     for (let q = ativas.length - 1; q >= 0; q--) {
       const a = ativas[q]; const d = m - a.M;
       if (d > 60) { ativas.splice(q, 1); continue; }
@@ -601,6 +710,8 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
     addStone(eng, { id: i + 1, n: H[i].n, t: H[i].t });
     const novas = avancar(eng, now, null, {}, []);
     for (const e of eng.entradas) if (e.ctx === undefined) e.ctx = ctxDe(fAtual);
+    for (; engReg < eng.entradas.length; engReg++) { const e = eng.entradas[engReg]; let st = EST_MIN.get(e.M); if (!st) { st = new Set(); EST_MIN.set(e.M, st); } st.add(e.est); }
+    if (!ENG_T0) ENG_T0 = H[i].t;
     for (const e of novas) {
       if (!NOME_EST[e.est] || (e.estado !== 'green' && e.estado !== 'loss')) continue;
       somar(fase === 'vivo' ? 'vivo' : 'hist', e.est, e);
