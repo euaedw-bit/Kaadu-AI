@@ -38,7 +38,22 @@ export const TOLERANCIA = 1;
 const FOLGA_CHEGADA = 45000;
 const completa = (stones, M, now) =>
   now >= (M + TOLERANCIA + 1) * MIN + FOLGA_CHEGADA || stones.some((s) => mi(s.t) >= M + TOLERANCIA + 1);
-const acerto = (stones, M) => stones.find((s) => s.n === 0 && Math.abs(mi(s.t) - M) <= TOLERANCIA) || null;
+// Base 39 (e +49): vale a ÚLTIMA pedra do minuto M-1, as 2 pedras do minuto M e a PRIMEIRA pedra do minuto M+1 (4 pedras).
+// Demais estratégias: o minuto M inteiro e 1 minuto inteiro para mais e para menos.
+const acerto = (stones, M, est) => {
+  if (est === 'B39') {
+    for (let i = 0; i < stones.length; i++) {
+      const s = stones[i];
+      if (s.n !== 0) continue;
+      const m = mi(s.t);
+      if (m === M) return s;
+      const seg = i > 0 && mi(stones[i - 1].t) === m ? 2 : 1; // 1ª ou 2ª pedra do minuto
+      if ((m === M - 1 && seg === 2) || (m === M + 1 && seg === 1)) return s;
+    }
+    return null;
+  }
+  return stones.find((s) => s.n === 0 && Math.abs(mi(s.t) - M) <= TOLERANCIA) || null;
+};
 
 function criar(S, est, M, now) {
   const e = { id: ++S.seq, est, M, estado: 'pendente', criada: now, hitId: null,
@@ -52,7 +67,7 @@ function resolverTodas(S, now, novas) {
   const ord = [...S.entradas].sort((a, b) => a.M - b.M);
   for (const e of ord) {
     if (e.estado !== 'pendente' || !completa(S.stones, e.M, now)) continue;
-    const h = acerto(S.stones, e.M);
+    const h = acerto(S.stones, e.M, e.est);
     e.estado = h ? 'green' : 'loss';
     e.hitId = h ? h.id : null;
     e.resolvida = now;

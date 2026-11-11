@@ -24,6 +24,7 @@ const dmhms = (t) => { const d = new Date(t); return `${pad(d.getDate())}/${pad(
 const pc = (x) => `${(x * 100).toFixed(1).replace('.', ',')}%`;
 const p0Branco = (k) => 1 - Math.pow(14 / 15, k);
 const zsc = (n, h, p) => (n ? (h - n * p) / Math.sqrt(n * p * (1 - p)) : 0);
+const zdif = (a, b) => { if (!a.n || !b.n) return 0; const p = (a.h + b.h) / (a.n + b.n); if (p <= 0 || p >= 1) return 0; return (a.h / a.n - b.h / b.n) / Math.sqrt(p * (1 - p) * (1 / a.n + 1 / b.n)); };
 const NOME_EST = { B39: 'Base 39', PA: 'PA', BC: 'BC' };
 
 /* ---------- hipóteses: condição (o que o gráfico mostra) x alvo (o que se espera depois) ---------- */
@@ -68,6 +69,7 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
   const SEG = [];      // início do trecho contínuo de cada pedra
   const HIP = montarHipoteses();
   const HIDX = {};
+  const minIdx = new Map();
   HIP.forEach((h) => { HIDX[h.id] = h; });
   let LINHAS = [];
   let seqLinha = 0;
@@ -96,6 +98,8 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
     seqLinha = o.seqLinha || LINHAS.reduce((a, l) => Math.max(a, l.id), 0);
     seqChute = o.seqChute || 0;
     placar = o.placar || placar;
+    if (o.ps) PS = Object.assign({ bt: 0, bb: 0, tm: 0, ms: 0 }, o.ps);
+    if (o.pl3) PL3 = { confirmada: Object.assign(novoPL(), o.pl3.confirmada), promissora: Object.assign(novoPL(), o.pl3.promissora), explorando: Object.assign(novoPL(), o.pl3.explorando) };
     ST.vivo = o.stVivo || {};
     ultResumo = o.ultResumo || Date.now();
     for (const id in o.vivo || {}) if (HIDX[id]) HIDX[id].fases.vivo = o.vivo[id];
@@ -104,7 +108,7 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
     if (!sujo && !forcar) return;
     const vivo = {};
     HIP.forEach((h) => { if (h.fases.vivo.n) vivo[h.id] = h.fases.vivo; });
-    store.set(KEY, { v: 1, seqLinha, seqChute, placar, stVivo: ST.vivo, ultResumo, vivo, linhas: LINHAS.slice(-MAX_LINHAS) });
+    store.set(KEY, { v: 1, ps: PS, pl3: PL3, seqLinha, seqChute, placar, stVivo: ST.vivo, ultResumo, vivo, linhas: LINHAS.slice(-MAX_LINHAS) });
     sujo = false;
   }
 
@@ -283,7 +287,8 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
   /* ---------- OBSERVATÓRIO: as regras que o dono descreveu (dezenas, devedor, dupla/39/49, pedra 5, sinais 11/12) ---------- */
   // Definições do dono:
   //  - dupla = os 2 brancos do MESMO minuto (as duas pedras do minuto). Conta como UM só evento.
-  //  - janela dos 39 = minutos M+38 a M+40 (6 pedras); janela dos 49 = minutos M+48 a M+50.
+  //  - janela dos 39 = última pedra do minuto M+38, as 2 do M+39 e a primeira do M+40 (4 pedras); janela dos 49 = igual em M+48/49/50.
+  //  - demais cálculos (somas do branco): o minuto da soma e 1 minuto inteiro antes e depois (6 pedras).
   //  - alerta: pedra 5 vermelha 10 minutos antes do minuto-alvo (M+29 para o 39; M+39 para o 49).
   //  - dezena devedora: dezena (0-9, 10-19...) sem branco na hora anterior. 1 branco quita, mas espera-se (dívida+1).
   const hmin = (mi) => { const d = new Date(mi * MIN); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
@@ -307,6 +312,7 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
     for (let i = 0; i < N; i++) { const m = Math.floor(H[i].t / MIN); let l = mm.get(m); if (!l) { l = []; mm.set(m, l); } l.push(i); }
     const dentro = (a, b) => { const o = []; for (let m = a; m <= b; m++) { const l = mm.get(m); if (l) for (const x of l) o.push(x); } return o; };
     const ultMin = Math.floor(H[N - 1].t / MIN);
+    const jan4 = (Mc) => { const a = mm.get(Mc - 1), b = mm.get(Mc), c = mm.get(Mc + 1); const o = []; if (a && a.length) o.push(a[a.length - 1]); if (b) for (const x of b) o.push(x); if (c && c.length) o.push(c[0]); return o; };
 
     /* A) brancos por dezena de minuto */
     const slots = new Map();
@@ -368,10 +374,10 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
     const ev = [];
     for (const M of duplas) {
       if (M + 40 > ultMin) continue;
-      const w39 = dentro(M + 38, M + 40);
-      if (w39.length < 5) continue;
+      const w39 = jan4(M + 39);
+      if (w39.length < 4) continue;
       const e = { M, w39, hit39: w39.some((i) => H[i].n === 0), ctx: ctxEm(w39[0]) };
-      if (M + 50 <= ultMin) { const w49 = dentro(M + 48, M + 50); if (w49.length >= 5) { e.w49 = w49; e.hit49 = w49.some((i) => H[i].n === 0); } }
+      if (M + 50 <= ultMin) { const w49 = jan4(M + 49); if (w49.length >= 4) { e.w49 = w49; e.hit49 = w49.some((i) => H[i].n === 0); } }
       e.a29 = dentro(M + 29, M + 29).some((i) => H[i].n === 5);
       e.a39 = dentro(M + 39, M + 39).some((i) => H[i].n === 5);
       e.dentroAlerta = dentro(M + 29, M + 29).length >= 2;
@@ -380,14 +386,14 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
     const corteM = ev.length ? ev[Math.floor(ev.length / 2)].M : 0;
     const recente = (e) => e.M >= corteM;
     const cnt = (arr, f) => { let n = 0, h = 0; for (const e of arr) { const r = f(e); if (r === null || r === undefined) continue; n++; if (r) h++; } return [n, h]; };
-    const P6 = p0Branco(6);
+    const P6 = p0Branco(4); // janela de 4 pedras
     const r39 = (e) => e.hit39;
     const r49 = (e) => (!e.hit39 && e.hit49 !== undefined ? e.hit49 : null);
     L.push('');
     L.push('C) DOIS BRANCOS NO MESMO MINUTO -> BRANCO 39 MINUTOS DEPOIS (±1 min), SENÃO 49 MINUTOS DEPOIS (±1 min)');
     L.push(`   Duplas no mesmo minuto encontradas: ${duplas.length} (analisadas com janela completa: ${ev.length})`);
     const c39 = cnt(ev, r39);
-    L.push(`   Pagou na janela dos 39 (6 pedras): ${fmtTaxa(c39[0], c39[1], P6)}`);
+    L.push(`   Pagou na janela dos 39 (4 pedras: última do minuto 38, as 2 do 39, primeira do 40): ${fmtTaxa(c39[0], c39[1], P6)}`);
     L.push(`      metade antiga ${fmtSub(...cnt(ev.filter((e) => !recente(e)), r39))} | metade recente ${fmtSub(...cnt(ev.filter(recente), r39))}`);
     const c49 = cnt(ev, r49);
     L.push(`   Quando NÃO pagou aos 39, pagou na janela dos 49: ${fmtTaxa(c49[0], c49[1], P6)}  <- o "garantido" do dono`);
@@ -434,7 +440,7 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
     L.push(`   Saiu 12 na janela dos 39 -> branco nas 4 pedras seguintes: ${fmtTaxa(...f1(a12), p0Branco(4))}`);
     L.push(`   Saiu 12, não pagou em 4 pedras -> pagou na janela dos 49: ${fmtTaxa(...f1(a12b), P6)}`);
     L.push(`   Saiu 11 na janela dos 39 e não pagou -> pagou aos 49: ${fmtTaxa(...f1(a11), P6)} | sem o 11: ${fmtSub(...f1(a11n))}`);
-    L.push(`   12 seguido de 11 em 4 pedras -> branco nas 4 pedras ou aos 49: ${fmtTaxa(...f1(a1211), 1 - Math.pow(14 / 15, 10))}`);
+    L.push(`   12 seguido de 11 em 4 pedras -> branco nas 4 pedras ou aos 49: ${fmtTaxa(...f1(a1211), 1 - Math.pow(14 / 15, 8))}`);
     /* F) somas do branco (minuto do branco + valor das pedras vizinhas) */
     L.push('');
     L.push('F) SOMAS DO BRANCO (minuto do branco + pedras vizinhas; 10 a 14 viram 1 dígito: 13 = 1+3 = 4)');
@@ -488,18 +494,19 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
       return (a.h / a.n - b.h / b.n) / Math.sqrt(pc2 * (1 - pc2) * (1 / a.n + 1 / b.n));
     };
     const linhaF = (nome, w, c) => `   ${nome}: brancos ${fmtSub(w.n, w.h)} | controle (pedras comuns) ${fmtSub(c.n, c.h)} | z=${z2(w, c).toFixed(1)}`;
-    L.push('   Horário exato (as 2 pedras do minuto da soma):');
-    NOMES.forEach((nm, q) => L.push(linhaF(nm, AG.W[q].ex, AG.C[q].ex)));
-    L.push(linhaF('QUALQUER das somas', ANY.W.ex, ANY.C.ex));
-    L.push('   Com 1 minuto de tolerância (6 pedras):');
+    L.push('   REGRA DO DONO: acerto = branco no minuto da soma OU no minuto inteiro antes/depois (6 pedras):');
     NOMES.forEach((nm, q) => L.push(linhaF(nm, AG.W[q].tol, AG.C[q].tol)));
     L.push(linhaF('QUALQUER das somas', ANY.W.tol, ANY.C.tol));
-    L.push(`   "QUALQUER" (horário exato) - metade antiga ${fmtSub(ANYm.Wa.ex.n, ANYm.Wa.ex.h)} | metade recente ${fmtSub(ANYm.Wb.ex.n, ANYm.Wb.ex.h)}`);
-    L.push(`   "QUALQUER" (horário exato) - com repetição ${fmtSub(ANYm.Wrep.ex.n, ANYm.Wrep.ex.h)} | sem ${fmtSub(ANYm.Wnrep.ex.n, ANYm.Wnrep.ex.h)} | com pretas altas ${fmtSub(ANYm.Walt.ex.n, ANYm.Walt.ex.h)} | sem ${fmtSub(ANYm.Wnalt.ex.n, ANYm.Wnalt.ex.h)}`);
+    L.push('   Só o minuto exato da soma (2 pedras), para comparar:');
+    NOMES.forEach((nm, q) => L.push(linhaF(nm, AG.W[q].ex, AG.C[q].ex)));
+    L.push(linhaF('QUALQUER das somas', ANY.W.ex, ANY.C.ex));
+    L.push(`   "QUALQUER" (±1 min) - metade antiga ${fmtSub(ANYm.Wa.tol.n, ANYm.Wa.tol.h)} | metade recente ${fmtSub(ANYm.Wb.tol.n, ANYm.Wb.tol.h)}`);
+    L.push(`   "QUALQUER" (±1 min) - com repetição ${fmtSub(ANYm.Wrep.tol.n, ANYm.Wrep.tol.h)} | sem ${fmtSub(ANYm.Wnrep.tol.n, ANYm.Wnrep.tol.h)} | com pretas altas ${fmtSub(ANYm.Walt.tol.n, ANYm.Walt.tol.h)} | sem ${fmtSub(ANYm.Wnalt.tol.n, ANYm.Wnalt.tol.h)}`);
     L.push('   Brancos colados em MINUTOS DIFERENTES (fora das contas acima, só para observar):');
     NOMES.forEach((nm, q) => { if (AGcol[q].ex.n) L.push(linhaF(nm + ' (exato)', AGcol[q].ex, AG.C[q].ex)); });
     L.push(linhaF('QUALQUER (exato)', ANYcol.ex, ANY.C.ex));
     L.push(linhaF('QUALQUER (com tolerância)', ANYcol.tol, ANY.C.tol));
+    L.push(`   Placar ao vivo (minuto exato, somas dos brancos dos últimos 60 min): ${PS.bb} de ${PS.bt} brancos bateram com alguma soma (${PS.bt ? pc(PS.bb / PS.bt) : '—'}); ${PS.tm ? pc(PS.ms / PS.tm) : '—'} dos minutos quaisquer também têm soma ativa.`);
     L.push('   Controle = o MESMO cálculo feito a partir de pedras que não são branco. Se o branco não tem taxa maior que o controle, a soma não ajuda.');
     L.push('   Com 7 horários e tolerância, "cair um branco em algum" acontece quase sempre por sorte: só vale a diferença para o controle.');
     /* G) sequência de N em N minutos a partir de um branco */
@@ -509,7 +516,7 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
     const b39Min = new Set();
     for (const M of duplas) { for (let d = 38; d <= 40; d++) b39Min.add(M + d); for (let d = 48; d <= 50; d++) b39Min.add(M + d); }
     const engMin0 = ENG_T0 ? Math.floor(ENG_T0 / MIN) + 60 : Infinity;
-    const cadeia = (passo, digs, K, deep) => {
+    const cadeia = (passo, digs, K, deep, tol) => {
       const novo = () => ({ n: 0, k: Array(K).fill(0), tot: 0, ge: [0, 0, 0, 0, 0], n3: 0, a3: 0, run: 0, recs: [] });
       const W = novo(), Cc = novo();
       for (const [m, l] of mm) {
@@ -519,7 +526,7 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
         const hits = []; const rc = []; let ok = true;
         for (let k = 1; k <= K; k++) {
           const Mt = m + passo * k;
-          const r = branco(Mt, Mt);
+          const r = tol ? branco(Mt - 1, Mt + 1) : branco(Mt, Mt);
           if (r === null) { ok = false; break; }
           hits.push(r);
           if (deep) { const ls = mm.get(Mt); rc.push({ hit: r, Mt, idx: ls ? ls[0] - 1 : -1 }); }
@@ -536,8 +543,8 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
       }
       return { W, C: Cc };
     };
-    const mostrar = (nome, passo, digs, K, deep) => {
-      const { W, C: Cc } = cadeia(passo, digs, K, deep);
+    const mostrar = (nome, passo, digs, K, deep, tol) => {
+      const { W, C: Cc } = cadeia(passo, digs, K, deep, tol);
       L.push(`   ${nome}: ${W.n} inícios com branco | ${Cc.n} minutos de controle (sem branco)`);
       if (!W.n || !Cc.n) return;
       const ps = [];
@@ -575,6 +582,7 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
       for (const e of ['B39', 'PA', 'BC', 'W']) split(`estratégia ${NOME_EST[e] || 'Wall'} com entrada nesse horário (±1 min)`, (r) => r.es.has(e), (r) => r.es !== null);
     };
     mostrar('Passo 3, início só em minuto terminado em 3 ou 9 (regra do dono), seguindo 12 passos (36 min)', 3, [3, 9], 12, true);
+    mostrar('Passo 3, início em 3 ou 9, 12 passos, com MARGEM de 1 minuto (cada passo = 3 minutos inteiros; com passo 3 as janelas cobrem TODOS os minutos, então a chance por passo sobe para 34%)', 3, [3, 9], 12, false, true);
     mostrar('Passo 3, início em qualquer minuto (para ver se 3 e 9 são mesmo especiais)', 3, null, 6, false);
     mostrar('Passo 4, início em qualquer minuto', 4, null, 6, false);
     mostrar('Passo 5, início em qualquer minuto', 5, null, 6, false);
@@ -590,6 +598,7 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
   /* ---------- observatório ao vivo: avisa na conversa quando uma regra do dono entra em ação ---------- */
   const ativas = [];
   const somas = [];
+  let PS = { bt: 0, bb: 0, tm: 0, ms: 0 };
   let seq3 = null;
   const fimSeq = (q, t) => {
     const ks = Object.keys(q.hit).map(Number).sort((x, y) => x - y);
@@ -598,9 +607,12 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
   function vivoObs(i) {
     const { n, t } = H[i];
     const m = Math.floor(t / MIN);
+    const pos = i > 0 && Math.floor(H[i - 1].t / MIN) === m && SEG[i - 1] === SEG[i] ? 2 : 1; // 1ª ou 2ª pedra do minuto
+    const enJ39 = (d) => (d === 38 && pos === 2) || d === 39 || (d === 40 && pos === 1);
+    const enJ49 = (d) => (d === 48 && pos === 2) || d === 49 || (d === 50 && pos === 1);
     if (n === 0 && i > 0 && H[i - 1].n === 0 && Math.floor(H[i - 1].t / MIN) === m && SEG[i - 1] === SEG[i] && !ativas.some((a) => a.M === m)) {
       ativas.push({ M: m, w39: null, w49: null, al29: false, al39: false, s12: null, s11: false });
-      emitir('branco', `⚪⚪ Dupla no minuto ${hmin(m)} (os dois brancos no mesmo minuto). Janela dos 39: ${hmin(m + 38)} a ${hmin(m + 40)}. Janela dos 49: ${hmin(m + 48)} a ${hmin(m + 50)}. Alerta (pedra 5 vermelha) esperado às ${hmin(m + 29)}.`, t);
+      emitir('branco', `⚪⚪ Dupla no minuto ${hmin(m)} (os dois brancos no mesmo minuto). Janela dos 39 (4 pedras): última de ${hmin(m + 38)}, as 2 de ${hmin(m + 39)} e a primeira de ${hmin(m + 40)}. Janela dos 49: última de ${hmin(m + 48)}, as 2 de ${hmin(m + 49)} e a primeira de ${hmin(m + 50)}. Alerta (pedra 5 vermelha) esperado às ${hmin(m + 29)}.`, t);
     }
     if (i >= 4 && H[i - 2].n === 0 && SEG[i - 4] === SEG[i] && !somas.some((x) => x.i === i - 2)) {
       const red = (x) => (x >= 10 ? Math.floor(x / 10) + (x % 10) : x);
@@ -612,11 +624,16 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
       const colDifV = (H[j - 1].n === 0 && Math.floor(H[j - 1].t / MIN) !== Tm) || (H[j + 1].n === 0 && Math.floor(H[j + 1].t / MIN) !== Tm);
       emitir('estrat', `🧮 Somas do branco das ${hms(H[j].t)}${colDifV ? ' (colado em outro minuto: só observação)' : ''} [trás ${d} ${c} | frente ${a} ${b}]: ${lista}.`, t);
     }
-    if (n === 0) {
-      for (const x of somas) {
-        for (const [nm, k] of x.alvos) {
-          if (x.Tm + k === m) emitir('ok', `✅ Branco às ${hms(t)} bateu com a soma "${nm}" do branco das ${hmin(x.Tm)}.`, t);
-        }
+    {
+      // placar honesto das somas: quantos brancos bateram com alguma soma ativa, contra quantos minutos QUAISQUER têm soma ativa
+      const acertos = [];
+      for (const x of somas) for (const [nm, k] of x.alvos) if (x.Tm + k === m) acertos.push(`"${nm}" do branco das ${hmin(x.Tm)}`);
+      if (pos === 1) { PS.tm++; if (acertos.length) PS.ms++; sujo = true; }
+      else if (acertos.length && PS.tm === 0) { /* sem base ainda */ }
+      const primeiroBranco = n === 0 && !(pos === 2 && H[i - 1].n === 0);
+      if (primeiroBranco) {
+        PS.bt++; if (acertos.length) PS.bb++; sujo = true;
+        if (acertos.length) emitir('ok', `✅ Branco às ${hms(t)} bateu com ${acertos.length} soma(s): ${acertos.slice(0, 4).join(', ')}. Placar: ${PS.bb} de ${PS.bt} brancos bateram com alguma soma ativa (${pc(PS.bb / PS.bt)}), mas ${pc(PS.ms / Math.max(1, PS.tm))} dos minutos QUAISQUER também têm soma ativa. Só vale se o primeiro número ficar bem acima do segundo.`, t);
       }
     }
     while (somas.length && m - somas[0].Tm > 60) somas.shift();
@@ -647,7 +664,7 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
       if (d > 60) { ativas.splice(q, 1); continue; }
       if (d === 29 && n === 5 && !a.al29) { a.al29 = true; emitir('chute', `🔔 Pedra 5 vermelha às ${hms(t)}: alerta de que o branco dos 39 (dupla de ${hmin(a.M)}) deve vir por volta de ${hmin(a.M + 39)}.`, t); }
       if (d === 39 && n === 5 && !a.al39 && a.w39 !== 'hit') { a.al39 = true; emitir('chute', `🔔 Pedra 5 vermelha às ${hms(t)}: alerta para o branco dos 49 (dupla de ${hmin(a.M)}), por volta de ${hmin(a.M + 49)}.`, t); }
-      if (d >= 38 && d <= 40) {
+      if (enJ39(d)) {
         if (n === 0 && a.w39 === null) { a.w39 = 'hit'; emitir('ok', `✅ Branco na janela dos 39 (dupla de ${hmin(a.M)}) às ${hms(t)}.`, t); }
         if (n === 12 && a.w39 === null && !a.s12) { a.s12 = { i }; emitir('regime', `12 às ${hms(t)} na janela dos 39: segundo o dono, branco deve vir nas próximas 4 pedras.`, t); }
         if (n === 11 && a.w39 === null && !a.s11) { a.s11 = true; emitir('info', `11 às ${hms(t)} na janela dos 39 (dupla de ${hmin(a.M)}).`, t); }
@@ -657,10 +674,259 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
         if (dist12 > 0 && dist12 <= 4 && n === 0) { a.s12.fim = true; emitir('ok', `✅ Branco veio ${dist12} pedra(s) depois do 12.`, t); }
         else if (dist12 === 4) { a.s12.fim = true; emitir('erro', '❌ O 12 não pagou nas 4 pedras seguintes. Pela regra, espera-se na janela dos 49.', t); }
       }
-      if (d > 40 && a.w39 === null) { a.w39 = 'miss'; emitir('erro', `❌ Janela dos 39 NÃO pagou (dupla de ${hmin(a.M)}). Pela regra, vem na janela dos 49: ${hmin(a.M + 48)} a ${hmin(a.M + 50)}.`, t); }
-      if (d >= 48 && d <= 50 && a.w39 === 'miss' && a.w49 === null && n === 0) { a.w49 = 'hit'; emitir('ok', `✅ Branco na janela dos 49 (dupla de ${hmin(a.M)}) às ${hms(t)}.`, t); }
-      if (d > 50 && a.w39 === 'miss' && a.w49 === null) { a.w49 = 'miss'; emitir('erro', `❌ Janela dos 49 também NÃO pagou (dupla de ${hmin(a.M)}).`, t); }
+      if ((d > 40 || (d === 40 && pos === 1)) && a.w39 === null) { a.w39 = 'miss'; emitir('erro', `❌ Janela dos 39 NÃO pagou (dupla de ${hmin(a.M)}). Pela regra, vem na janela dos 49 (por volta de ${hmin(a.M + 49)}).`, t); }
+      if (enJ49(d) && a.w39 === 'miss' && a.w49 === null && n === 0) { a.w49 = 'hit'; emitir('ok', `✅ Branco na janela dos 49 (dupla de ${hmin(a.M)}) às ${hms(t)}.`, t); }
+      if ((d > 50 || (d === 50 && pos === 1)) && a.w39 === 'miss' && a.w49 === null) { a.w49 = 'miss'; emitir('erro', `❌ Janela dos 49 também NÃO pagou (dupla de ${hmin(a.M)}).`, t); }
     }
+  }
+
+  /* ---------- APRENDIZ DE ENTRADAS: chuta, confere, procura o porquê do erro e tenta melhorar ---------- */
+  // Cada "entrada" é uma aposta SIMULADA (sem dinheiro) de branco num minuto-alvo (ou numa janela de 4 pedras nos 39/49, ou ±1 minuto nas somas).
+  // Origens: sequência de 3 em 3 (branco em final 3/9), janela dos 39 e dos 49 (dupla), somas do branco (7 tipos).
+  // Em cada entrada guarda-se o estado do gráfico (repetição, pretas altas, seca, horário, devedor, coincidências).
+  // O aprendiz testa filtros ("só entrar quando..."), separa treino/teste/ao vivo e só chuta com filtro que tem prova.
+  const PAGA = 14; // pagamento do branco: 14x (retorno total). 1 ficha por pedra até sair branco.
+  const FEATS = ['rep', 'altas', 'reg', 'seca20', 'noite', 'dia1', 'dia2', 'dev', 'est', 'somaC', 'j39', 'k2', 'k4', 'dig9'];
+  const FNOME = {
+    rep: 'repetição', altas: 'pretas altas', reg: 'regime (repetição + pretas altas)', seca20: 'depois de seca de 20+ min',
+    noite: 'noite (22h-6h)', dia1: 'manhã (6h-14h)', dia2: 'tarde (14h-22h)', dev: 'dezena devedora',
+    est: 'outra estratégia no horário', somaC: 'soma do branco no horário', j39: 'janela 39/49 no horário',
+    k2: 'passos 1-2', k4: 'passos 1-4', dig9: 'início em final 9',
+  };
+  const SNOME = { SEQ3: 'Sequência 3 em 3', B39: 'Janela dos 39', B49: 'Janela dos 49 (após falhar 39)', S0: 'Soma frente 1', S1: 'Soma frente 2', S2: 'Soma frente 1+2', S3: 'Soma trás 1', S4: 'Soma trás 2', S5: 'Soma trás 1+2', S6: 'Soma 4 juntas' };
+  const SLIST = Object.keys(SNOME);
+  const FIDX = {}; FEATS.forEach((f, i) => { FIDX[f] = i; });
+  const EXCL = (s) => (s === 'SEQ3' ? [] : ['k2', 'k4', 'dig9'].concat(s === 'B39' || s === 'B49' ? ['j39'] : []));
+  const Z_TR = 3.5;
+  const PEND = []; const ESL = {}; const ENTKEY = new Set(); const somaPend = [];
+  const incSoma = new Set(); const incJ39 = new Set();
+  const FILT = {}; const STAT = {};
+  const novoPL = () => ({ n: 0, h: 0, e: 0, net: 0, en: 0 });
+  let PL3 = { confirmada: novoPL(), promissora: novoPL(), explorando: novoPL() };
+  const cnt0 = () => ({ n: 0, h: 0, e: 0, v: 0, net: 0 });
+  const pSt = (pst) => 1 - Math.pow(14 / 15, pst);
+  const netEsp = (pst) => { let a = 0, q = 1; for (let j = 1; j <= pst; j++) { a += q * (1 / 15) * (PAGA - j); q *= 14 / 15; } return a - q * pst; };
+  const zc = (c) => (c.v > 0 ? (c.h - c.e) / Math.sqrt(c.v) : 0);
+  const somaC = (c, e) => { c.n++; c.h += e.hit; const p = pSt(e.pst); c.e += p; c.v += p * (1 - p); c.net += e.net; };
+  const redD = (x) => (x >= 10 ? Math.floor(x / 10) + (x % 10) : x);
+
+  const secaAntesDe = (io) => {
+    const m0 = Math.floor(H[io].t / MIN); let j = io - 1;
+    while (j >= 0 && SEG[j] === SEG[io] && (H[j].n !== 0 || Math.floor(H[j].t / MIN) === m0)) j--;
+    return j >= 0 && SEG[j] === SEG[io] ? (H[io].t - H[j].t) / MIN : null;
+  };
+  function baseBits(i, io) {
+    const c = ctxEm(i); let b = 0;
+    const set = (nm, v) => { if (v) b |= (1 << FIDX[nm]); };
+    set('rep', c.rep); set('altas', c.altas); set('reg', c.rep && c.altas);
+    const sa = io === undefined ? null : secaAntesDe(io); set('seca20', sa !== null && sa >= 20);
+    const hr = new Date(H[i].t).getHours(); set('noite', hr >= 22 || hr < 6); set('dia1', hr >= 6 && hr < 14); set('dia2', hr >= 14 && hr < 22);
+    return b;
+  }
+  function alvoBits(i, Mt) {
+    let b = 0; const set = (nm, v) => { if (v) b |= (1 << FIDX[nm]); };
+    const offMin = new Date(H[i].t).getTimezoneOffset();
+    const dz = Math.floor((Mt - offMin) / 10) * 10 + offMin - 60; let nn = 0, ww = 0;
+    for (let d = 0; d < 10; d++) { const l = minIdx.get(dz + d); if (l) for (const x of l) { nn++; if (H[x].n === 0) ww++; } }
+    set('dev', nn >= 18 && ww === 0);
+    let est = false;
+    for (let d = -1; d <= 1 && !est; d++) { const sx = EST_MIN.get(Mt + d); if (sx && (sx.has('B39') || sx.has('PA') || sx.has('BC'))) est = true; }
+    set('est', est); set('somaC', incSoma.has(Mt)); set('j39', incJ39.has(Mt));
+    return b;
+  }
+  const criarEnt = (s, k, M0, M1, bits, fase, t0, opt = {}) => {
+    const key = opt.key || `${s}:${M0}`;
+    if (ENTKEY.has(key)) return null;
+    ENTKEY.add(key);
+    const e = { s, k, M0, M1, Mc: opt.Mc !== undefined ? opt.Mc : M0, jan4: !!opt.jan4, pst: opt.jan4 ? 4 : 2 * (M1 - M0 + 1), bits, fase, t0, hit: 0, net: 0, chuteT: null, fl: null };
+    PEND.push(e);
+    return e;
+  };
+
+  function statusF(c) {
+    const tr = c.treino, te = c.teste, vv = c.vivo;
+    if (vv.n >= 30 && zc(vv) >= 1.96 && tr.n >= 40 && zc(tr) >= 3) return 'confirmada';
+    if (tr.n >= 40 && zc(tr) >= Z_TR && te.n >= 20 && zc(te) >= 1.64) return 'promissora';
+    if (tr.n >= 40 && zc(tr) >= 2.5) return 'observar';
+    return 'sem evidência';
+  }
+  function aprenderEntradas(anunciar) {
+    let anunciados = 0;
+    for (const s of SLIST) {
+      const L = ESL[s] || [];
+      if (L.length < 40) { FILT[s] = []; continue; }
+      const ex = EXCL(s).map((f) => FIDX[f]);
+      const filtros = [{ id: 'todas', nome: 'todas as entradas', m: 0, v: 0 }];
+      for (const f of FEATS) {
+        const ix = FIDX[f]; if (ex.includes(ix)) continue;
+        filtros.push({ id: `${f}=1`, nome: `${FNOME[f]}: sim`, m: 1 << ix, v: 1 << ix });
+        filtros.push({ id: `${f}=0`, nome: `${FNOME[f]}: não`, m: 1 << ix, v: 0 });
+      }
+      const calc = (flt) => { const c = { treino: cnt0(), teste: cnt0(), vivo: cnt0() }; for (const e of L) if ((e.bits & flt.m) === flt.v) somaC(c[e.fase], e); return c; };
+      filtros.forEach((f) => { f.c = calc(f); });
+      const topS = filtros.filter((f) => f.id !== 'todas' && f.c.treino.n >= 40 && zc(f.c.treino) > 0).sort((a, b) => zc(b.c.treino) - zc(a.c.treino)).slice(0, 6);
+      for (let a = 0; a < topS.length; a++) for (let b = a + 1; b < topS.length; b++) {
+        const A = topS[a], B = topS[b]; if (A.m === B.m) continue;
+        const f2 = { id: `${A.id}&${B.id}`, nome: `${A.nome} + ${B.nome}`, m: A.m | B.m, v: A.v | B.v };
+        f2.c = calc(f2); filtros.push(f2);
+      }
+      const ant = STAT[s] || {}; const novo = {};
+      for (const f of filtros) {
+        f.status = statusF(f.c); f.zt = zc(f.c.treino); novo[f.id] = f.status;
+        const bom = (x) => x === 'confirmada' || x === 'promissora';
+        if (anunciar && f.id !== 'todas' && anunciados < 3 && bom(f.status) && !bom(ant[f.id] || '')) {
+          anunciados++;
+          sempre('descoberta', `📈 Aprendi: "${SNOME[s]}" com filtro "${f.nome}" passou na prova (${f.status}). Treino ${pc(f.c.treino.h / f.c.treino.n)} (${f.c.treino.n}) | teste ${f.c.teste.n ? pc(f.c.teste.h / f.c.teste.n) : '—'} (${f.c.teste.n}) | acaso ${pc(f.c.treino.e / f.c.treino.n)}.`);
+        } else if (anunciar && anunciados < 3 && bom(ant[f.id] || '') && !bom(f.status)) {
+          anunciados++;
+          sempre('info', `📉 "${SNOME[s]}" com filtro "${f.nome}" perdeu a prova (era ${ant[f.id]}, agora ${f.status}). Provavelmente era sorte.`);
+        }
+      }
+      STAT[s] = novo; FILT[s] = filtros;
+    }
+  }
+  function melhorFiltro(s, bits) {
+    const peso = { confirmada: 3, promissora: 2, observar: 1 };
+    let best = null;
+    for (const f of FILT[s] || []) {
+      if (f.id === 'todas' || !peso[f.status] || (bits & f.m) !== f.v) continue;
+      if (!best || peso[f.status] > peso[best.status] || (peso[f.status] === peso[best.status] && f.zt > best.zt)) best = f;
+    }
+    return best;
+  }
+  function diagnostico(e) {
+    const L = ESL[e.s] || [];
+    if (L.length < 60) return 'ainda há poucos dados para explicar.';
+    const out = [];
+    for (const f of FEATS) {
+      if (EXCL(e.s).includes(f)) continue;
+      const ix = FIDX[f]; const v = (e.bits >> ix) & 1;
+      const A = cnt0(), B = cnt0();
+      for (const x of L) somaC(((x.bits >> ix) & 1) === v ? A : B, x);
+      if (A.n >= 30 && B.n >= 30) { const z = zdif({ n: A.n, h: A.h }, { n: B.n, h: B.h }); if (z <= -1.64) out.push({ f, v, z, ra: A.h / A.n, rb: B.h / B.n, n: A.n }); }
+    }
+    out.sort((a, b) => a.z - b.z);
+    if (!out.length) { const T = cnt0(); for (const x of L) somaC(T, x); return `nenhuma condição explica o erro (taxa geral ${pc(T.h / T.n)} contra acaso ${pc(T.e / T.n)}): parece sorte`; }
+    return out.slice(0, 2).map((o) => `com "${FNOME[o.f]}: ${o.v ? 'sim' : 'não'}" a estratégia acerta só ${pc(o.ra)} (${o.n} casos) contra ${pc(o.rb)} no contrário; o filtro "${FNOME[o.f]}: ${o.v ? 'não' : 'sim'}" segue em teste`).join(' | ');
+  }
+
+  function resolverEntradas(i) {
+    const m = Math.floor(H[i].t / MIN);
+    const novas = [];
+    for (let q = PEND.length - 1; q >= 0; q--) {
+      const e = PEND[q]; if (e.M1 >= m) continue;
+      PEND.splice(q, 1);
+      const idxs = [];
+      if (e.jan4) {
+        const la = minIdx.get(e.M0), lb = minIdx.get(e.M0 + 1), lc = minIdx.get(e.M0 + 2);
+        if (la && la.length) idxs.push(la[la.length - 1]);
+        if (lb) for (const x of lb) idxs.push(x);
+        if (lc && lc.length) idxs.push(lc[0]);
+      } else for (let mi = e.M0; mi <= e.M1; mi++) { const l = minIdx.get(mi); if (l) for (const x of l) idxs.push(x); }
+      if (idxs.length < e.pst - 1) continue; // buraco nos dados: não conta
+      let net = -idxs.length, hit = 0;
+      for (let j = 0; j < idxs.length; j++) if (H[idxs[j]].n === 0) { hit = 1; net = PAGA - (j + 1); break; }
+      e.hit = hit; e.net = net;
+      (ESL[e.s] || (ESL[e.s] = [])).push(e);
+      if (e.chuteT) {
+        const P = PL3[e.chuteT]; P.n++; P.h += hit; P.e += pSt(e.pst); P.net += net; P.en += netEsp(e.pst); sujo = true;
+        const passo = e.s === 'SEQ3' ? ` passo ${e.k}` : '';
+        if (hit) emitir('ok', `✅ Chute acertou: ${SNOME[e.s]}${passo} às ${hmin(e.Mc)} [${e.chuteT}] · ganho simulado ${net > 0 ? '+' : ''}${net} fichas.`, H[i].t);
+        else emitir('erro', `❌ Chute errou: ${SNOME[e.s]}${passo} às ${hmin(e.Mc)} [${e.chuteT}] · perda simulada ${net} fichas. Por quê: ${diagnostico(e)}.`, H[i].t);
+      }
+      if (e.s === 'B39' && !hit) novas.push({ s: 'B49', k: 0, M0: e.M0 + 10, M1: e.M1 + 10, bits: e.bits, fase: e.fase, jan4: true, Mc: e.Mc + 10 });
+    }
+    return novas;
+  }
+  function finalizarLote(lote, t) {
+    // lote: entradas recém-criadas. Só no ao vivo: decide quais viram chute e anuncia agrupado.
+    const grupos = new Map();
+    for (const e of lote) {
+      if (e.fase !== 'vivo') continue;
+      const f = melhorFiltro(e.s, e.bits); if (!f) continue;
+      e.chuteT = f.status === 'observar' ? 'explorando' : f.status; e.fl = f;
+      const g = grupos.get(`${e.s}|${f.id}`) || { s: e.s, f, es: [] }; g.es.push(e); grupos.set(`${e.s}|${f.id}`, g);
+    }
+    for (const g of grupos.values()) {
+      const c = g.f.c.treino, te = g.f.c.teste;
+      const lista = g.es.slice(0, 12).map((e) => (e.s === 'SEQ3' ? `${hmin(e.Mc)} (passo ${e.k})` : e.jan4 ? `${hmin(e.Mc)} (4 pedras)` : `${hmin(e.Mc)} (±1 min)`)).join(', ');
+      emitir('chute', `🎯 Chute [${g.es[0].chuteT}] ${SNOME[g.s]}: ${lista}. Filtro "${g.f.nome}" · histórico: treino ${pc(c.h / c.n)} (${c.n}) · teste ${te.n ? pc(te.h / te.n) : '—'} (${te.n}) · acaso ${pc(c.e / c.n)}. (simulação, sem dinheiro)`, t);
+    }
+  }
+  function entradasPasso(i, fase) {
+    const { n, t } = H[i]; const m = Math.floor(t / MIN);
+    const lote = [];
+    const novasB49 = resolverEntradas(i);
+    for (const x of novasB49) { const e = criarEnt(x.s, x.k, x.M0, x.M1, x.bits, fase, t, { jan4: x.jan4, Mc: x.Mc, key: `${x.s}:${x.Mc}` }); if (e) lote.push(e); }
+    const mesmoMin = (j) => j >= 0 && Math.floor(H[j].t / MIN) === m;
+    if (n === 0) {
+      const primeiro = !(i > 0 && H[i - 1].n === 0 && mesmoMin(i - 1) && SEG[i - 1] === SEG[i]);
+      const dg = new Date(m * MIN).getMinutes() % 10;
+      const base = baseBits(i, i);
+      if (primeiro && (dg === 3 || dg === 9)) {
+        for (let k = 1; k <= 12; k++) {
+          const Mt = m + 3 * k;
+          let b = base | alvoBits(i, Mt);
+          if (k <= 2) b |= 1 << FIDX.k2; if (k <= 4) b |= 1 << FIDX.k4; if (dg === 9) b |= 1 << FIDX.dig9;
+          const e = criarEnt('SEQ3', k, Mt, Mt, b, fase, t); if (e) lote.push(e);
+        }
+      }
+      if (!primeiro && i > 0 && H[i - 1].n === 0) {
+        const bb = base | alvoBits(i, m + 39);
+        const e = criarEnt('B39', 0, m + 38, m + 40, bb, fase, t, { jan4: true, Mc: m + 39, key: `B39:${m + 39}` }); if (e) lote.push(e);
+        for (let d = 38; d <= 40; d++) incJ39.add(m + d);
+        for (let d = 48; d <= 50; d++) incJ39.add(m + d);
+      }
+      somaPend.push({ io: i });
+    }
+    // somas: quando as 2 pedras da frente já chegaram
+    for (let q = somaPend.length - 1; q >= 0; q--) {
+      const o = somaPend[q];
+      if (i < o.io + 2) continue;
+      somaPend.splice(q, 1);
+      const io = o.io;
+      if (io < 2 || SEG[io - 2] !== SEG[io + 2]) continue;
+      const a = redD(H[io + 1].n), b = redD(H[io + 2].n), c = redD(H[io - 1].n), d = redD(H[io - 2].n);
+      const v = [a, b, a + b, c, d, c + d, a + b + c + d];
+      const T = Math.floor(H[io].t / MIN);
+      const base = baseBits(i, io);
+      const novos = [];
+      for (let z = 0; z < 7; z++) {
+        if (v[z] <= 0) continue;
+        const Mt = T + v[z];
+        const M0 = Math.max(T + 1, Mt - 1);
+        if (M0 <= m) continue; // a janela já começou: não vale (já se conhece parte das pedras)
+        const e = criarEnt(`S${z}`, z, M0, Mt + 1, base | alvoBits(i, Mt), fase, t, { Mc: Mt, key: `S${z}:${Mt}` }); if (e) { lote.push(e); novos.push(Mt); }
+      }
+      for (const Mt of novos) incSoma.add(Mt);
+    }
+    if (lote.length && fase === 'vivo') finalizarLote(lote, t);
+  }
+
+  function entradasRel() {
+    const L = [];
+    L.push('APRENDIZ DE ENTRADAS (o cérebro chuta, confere, procura o porquê do erro e tenta melhorar)');
+    L.push(`Simulação SEM dinheiro: cada entrada aposta 1 ficha por pedra até sair branco (pagamento ${PAGA}x o valor), na sequência de 3 em 3 (minuto exato, 2 pedras), nas somas (minuto da soma ±1 minuto, até 6 pedras) e nas janelas 39/49 (4 pedras).`);
+    L.push('Ele só "chuta" quando um filtro (ex.: "só sem repetição") passou na prova: treino, teste e ao vivo. "explorando" = ainda sem prova, só para coletar dados.');
+    L.push('Placar dos chutes ao vivo:');
+    for (const k of ['confirmada', 'promissora', 'explorando']) {
+      const P = PL3[k];
+      L.push(`   ${k}: ${P.h} acertos em ${P.n} (por acaso ~${P.e.toFixed(1).replace('.', ',')}) | saldo ${P.net.toFixed(0)} fichas (sem vantagem seria ${P.en.toFixed(0)})`);
+    }
+    try { aprenderEntradas(false); } catch (e) { L.push('erro no aprendiz: ' + e.message); return L; }
+    L.push('Por estratégia (todas as entradas simuladas no histórico + ao vivo):');
+    for (const s of SLIST) {
+      const E = ESL[s] || [];
+      if (E.length < 40) { L.push(`- ${SNOME[s]}: ${E.length} entradas (ainda poucas)`); continue; }
+      const c = cnt0(); let en = 0; for (const e of E) { somaC(c, e); en += netEsp(e.pst); }
+      L.push(`- ${SNOME[s]}: ${c.n} entradas | acerta ${pc(c.h / c.n)} (acaso ${pc(c.e / c.n)}, z=${zc(c).toFixed(1)}) | saldo ${c.net.toFixed(0)} fichas (sem vantagem: ${en.toFixed(0)})`);
+      const fs = (FILT[s] || []).filter((f) => f.id !== 'todas' && f.c.treino.n >= 40).sort((a, b) => b.zt - a.zt);
+      const t = (cc) => (cc.n ? `${pc(cc.h / cc.n)} (${cc.n})` : '—');
+      fs.slice(0, 2).forEach((f) => L.push(`     melhor filtro: ${f.nome} [${f.status}] treino ${t(f.c.treino)} | teste ${t(f.c.teste)} | ao vivo ${t(f.c.vivo)} | acaso ${pc(f.c.treino.e / Math.max(1, f.c.treino.n))}`));
+      if (fs.length) { const w = fs[fs.length - 1]; L.push(`     pior condição: ${w.nome} treino ${t(w.c.treino)} | teste ${t(w.c.teste)}`); }
+    }
+    L.push('Aviso: as entradas de uma mesma sequência/soma são parecidas entre si (não são totalmente independentes), então o "z" é um pouco otimista. Teste e ao vivo são a prova que vale.');
+    return L;
   }
 
   /* ---------- falas do cérebro sobre o que está vendo (só ao vivo) ---------- */
@@ -727,6 +993,7 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
   function adicionarPedra(n, t) {
     const i = H.length;
     H.push({ n, t });
+    { const mk = Math.floor(t / MIN); const l = minIdx.get(mk); if (l) l.push(i); else minIdx.set(mk, [i]); }
     SEG.push(i === 0 || t - H[i - 1].t > GAP_MS ? i : SEG[i - 1]);
     return i;
   }
@@ -747,6 +1014,7 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
         const i = adicionarPedra(lista[k].n, lista[k].t);
         passo(i, k < split ? 'treino' : 'teste');
         if (k >= N - 600) vivoObs(i);
+        entradasPasso(i, k < split ? 'treino' : 'teste');
         if (k >= ini) rodarEstrategias(i, lista[k].t + 25000, 'hist');
       }
       if (aoProgresso) aoProgresso(b / N);
@@ -768,6 +1036,7 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
       }
     }
     try { aprenderRegimes(); } catch (e) { sempre('info', 'Aprendiz de regime falhou: ' + e.message); }
+    try { aprenderEntradas(false); const qtd = SLIST.reduce((a, k) => a + (ESL[k] ? ESL[k].length : 0), 0); sempre('info', `🎓 Simulei ${qtd} entradas no histórico (sequência 3 em 3, janelas 39/49 e somas) para aprender quais condições funcionam.`); } catch (e) { sempre('info', 'Aprendiz de entradas falhou: ' + e.message); }
     pronto = true;
     ultResumo = Date.now();
     const f = fila; fila = [];
@@ -783,6 +1052,7 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
     const i = adicionarPedra(st.n, st.t);
     const f = passo(i, 'vivo');
     vivoObs(i);
+    entradasPasso(i, 'vivo');
     falar(f);
     rodarEstrategias(i, Date.now(), 'vivo');
     if (Date.now() - ultResumo > 30 * MIN) resumo();
@@ -792,6 +1062,7 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
   function resumo() {
     ultResumo = Date.now();
     try { aprenderRegimes(); } catch (e) {}
+    try { aprenderEntradas(true); } catch (e) {}
     const partes = [];
     partes.push(`chutes: ${placar.h} de ${placar.n} (acaso ~${placar.esp.toFixed(1).replace('.', ',')})`);
     for (const e of ['B39', 'PA', 'BC']) {
@@ -844,7 +1115,23 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
     } else L.push('- ainda sem pedras');
     L.push('');
     L.push('OBSERVATÓRIO DO DONO (regras da Blaze)');
-    try { observatorio().forEach((x) => L.push(x)); } catch (e) { L.push('erro no observatório: ' + e.message); }
+    try {
+      const obsL = observatorio();
+      // quadro-resumo: tudo que foi medido contra o acaso, e quanto se destaca
+      const med = [];
+      obsL.forEach((l) => { const m = /z=(-?\d+(?:\.\d+)?)/.exec(l); if (m) med.push({ z: parseFloat(m[1]), l: l.trim().replace(/\s+/g, ' ') }); });
+      if (med.length) {
+        const acima = med.filter((x) => x.z >= 3.4);
+        const esper = (med.length * 0.00034).toFixed(2).replace('.', ',');
+        L.push(`QUADRO-RESUMO: ${med.length} medições de "o que aconteceu contra o que o acaso daria"; ${acima.length} ficaram claramente acima (z de 3,4 ou mais). Por pura sorte, com ${med.length} medições, o esperado seria ~${esper} acima disso.`);
+        med.slice().sort((a, b) => b.z - a.z).slice(0, 6).forEach((x) => L.push('   • ' + x.l.slice(0, 230)));
+        L.push('   (z perto de 0 = aconteceu como o acaso prevê. Acima de ~3,4 em treino E teste = candidato a padrão real.)');
+        L.push('');
+      }
+      obsL.forEach((x) => L.push(x));
+    } catch (e) { L.push('erro no observatório: ' + e.message); }
+    L.push('');
+    try { entradasRel().forEach((x) => L.push(x)); } catch (e) { L.push('erro no aprendiz de entradas: ' + e.message); }
     L.push('');
     L.push('REGIMES APRENDIDOS (o cérebro testou várias definições)');
     const linhaC = (c, nome) => `  ${nome} -> treino: continua ${pc(c.tr.pCont)} (acaso ${pc(c.tr.pB)}, ${c.tr.nA} casos, z=${c.tr.z.toFixed(1)}) | teste: ${pc(c.te.pCont)} (acaso ${pc(c.te.pB)}, ${c.te.nA} casos, z=${c.te.z.toFixed(1)})`;
