@@ -279,6 +279,281 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
   const defRep = () => (APR.rep && APR.rep.cls !== 'não' ? { W: APR.rep.W, d: APR.rep.d, ap: true } : { W: 10, d: 5, ap: false });
   const defAltas = () => (APR.altas && APR.altas.cls !== 'não' ? { m: APR.altas.m, ent: APR.altas.th, sai: Math.max(APR.altas.ch + 0.05, APR.altas.th - 0.15), W: 20, ap: true } : { m: ALTA_MIN, ent: ALTA_ENTRA, sai: ALTA_SAI, W: 10, ap: false });
 
+  /* ---------- OBSERVATÓRIO: as regras que o dono descreveu (dezenas, devedor, dupla/39/49, pedra 5, sinais 11/12) ---------- */
+  // Definições do dono:
+  //  - dupla = os 2 brancos do MESMO minuto (as duas pedras do minuto). Conta como UM só evento.
+  //  - janela dos 39 = minutos M+38 a M+40 (6 pedras); janela dos 49 = minutos M+48 a M+50.
+  //  - alerta: pedra 5 vermelha 10 minutos antes do minuto-alvo (M+29 para o 39; M+39 para o 49).
+  //  - dezena devedora: dezena (0-9, 10-19...) sem branco na hora anterior. 1 branco quita, mas espera-se (dívida+1).
+  const hmin = (mi) => { const d = new Date(mi * MIN); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+  const binom = (n, k, p) => { let c = 1; for (let j = 0; j < k; j++) c = (c * (n - j)) / (j + 1); return c * Math.pow(p, k) * Math.pow(1 - p, n - k); };
+  const pMais = (n, k, p) => { let a = 0; for (let j = 0; j < k; j++) a += binom(n, j, p); return 1 - a; };
+  const ctxEm = (i) => {
+    const dr = defRep(), da = defAltas();
+    const d = distEm(i, dr.W);
+    const pa = da.ap ? propEm(i, da.m, da.W) : feat(i).prop;
+    return { rep: d !== null && d <= dr.d, altas: pa !== null && pa >= da.ent };
+  };
+  const fmtTaxa = (n, h, p0) => (n ? `${pc(h / n)} (${h}/${n}) | acaso ${pc(p0)} | z=${zsc(n, h, p0).toFixed(1)}` : 'sem casos ainda');
+  const fmtSub = (n, h) => (n ? `${pc(h / n)} (${h}/${n})` : '—');
+
+  function observatorio() {
+    const N = H.length;
+    const L = [];
+    if (N < 200) { L.push('- poucos dados (precisa de algumas horas de pedras)'); return L; }
+    const off = new Date(H[N - 1].t).getTimezoneOffset() * MIN;
+    const mm = new Map();
+    for (let i = 0; i < N; i++) { const m = Math.floor(H[i].t / MIN); let l = mm.get(m); if (!l) { l = []; mm.set(m, l); } l.push(i); }
+    const dentro = (a, b) => { const o = []; for (let m = a; m <= b; m++) { const l = mm.get(m); if (l) for (const x of l) o.push(x); } return o; };
+    const ultMin = Math.floor(H[N - 1].t / MIN);
+
+    /* A) brancos por dezena de minuto */
+    const slots = new Map();
+    for (let i = 0; i < N; i++) {
+      const k = Math.floor((H[i].t - off) / (10 * MIN));
+      let o = slots.get(k); if (!o) { o = { n: 0, w: 0, i0: i }; slots.set(k, o); }
+      o.n++; if (H[i].n === 0) o.w++;
+    }
+    const kUlt = Math.floor((H[N - 1].t - off) / (10 * MIN));
+    const valido = (k) => { const o = slots.get(k); return !!o && o.n >= 18 && k < kUlt; };
+    const dist = [0, 0, 0, 0]; const porDez = [0, 1, 2, 3, 4, 5].map(() => ({ n: 0, w: 0 })); let nVal = 0;
+    for (const [k, o] of slots) {
+      if (!valido(k)) continue;
+      nVal++; dist[Math.min(3, o.w)]++;
+      const z = ((k % 6) + 6) % 6; porDez[z].n++; porDez[z].w += o.w;
+    }
+    L.push('A) BRANCOS POR DEZENA DE MINUTO');
+    if (nVal) {
+      const esp = [binom(20, 0, 1 / 15), binom(20, 1, 1 / 15), binom(20, 2, 1 / 15), pMais(20, 3, 1 / 15)];
+      L.push(`   ${nVal} dezenas completas analisadas. Quantidade de brancos: real contra acaso`);
+      ['0', '1', '2', '3+'].forEach((nm, j) => L.push(`   ${nm} brancos: ${pc(dist[j] / nVal)} (acaso ${pc(esp[j])})`));
+      L.push('   Média de brancos por dezena (acaso 1,33): ' + porDez.map((o, z) => `${z * 10}-${z * 10 + 9}: ${o.n ? (o.w / o.n).toFixed(2).replace('.', ',') : '—'}`).join(' | '));
+    } else L.push('   ainda sem dezenas completas');
+
+    /* B) dezena devedora */
+    L.push('');
+    L.push('B) DEZENA DEVEDORA (mesma dezena nas horas anteriores sem branco)');
+    const dev = [0, 1, 2, 3].map(() => ({ n: 0, g1: 0, g2: 0, gd: 0, ctx: { rep1: [0, 0], rep0: [0, 0], al1: [0, 0], al0: [0, 0] } }));
+    for (const [k, o] of slots) {
+      if (!valido(k) || !valido(k - 6)) continue;
+      let d = 0;
+      for (let q = 1; q <= 3 && valido(k - 6 * q) && slots.get(k - 6 * q).w === 0; q++) d++;
+      const D = dev[d]; D.n++;
+      if (o.w >= 1) D.g1++;
+      if (o.w >= 2) D.g2++;
+      if (d >= 1 && o.w >= d + 1) D.gd++;
+      if (d >= 1) {
+        const c = ctxEm(o.i0); const ok = o.w >= d + 1 ? 1 : 0;
+        const a = c.rep ? D.ctx.rep1 : D.ctx.rep0; a[0]++; a[1] += ok;
+        const b = c.altas ? D.ctx.al1 : D.ctx.al0; b[0]++; b[1] += ok;
+      }
+    }
+    dev.forEach((D, d) => {
+      L.push(`   Dívida ${d} (${d === 0 ? 'hora anterior pagou' : d + ' hora(s) seguidas sem branco nessa dezena'}): ${D.n} casos`);
+      if (!D.n) return;
+      L.push(`     pagou 1+ branco: ${fmtTaxa(D.n, D.g1, pMais(20, 1, 1 / 15))}`);
+      L.push(`     pagou 2+ brancos: ${fmtTaxa(D.n, D.g2, pMais(20, 2, 1 / 15))}`);
+      if (d >= 1) {
+        L.push(`     pagou o esperado (${d + 1}+ brancos): ${fmtTaxa(D.n, D.gd, pMais(20, d + 1, 1 / 15))}`);
+        L.push(`     esperado respeitado com repetição ${fmtSub(...D.ctx.rep1)} | sem repetição ${fmtSub(...D.ctx.rep0)}`);
+        L.push(`     esperado respeitado com pretas altas ${fmtSub(...D.ctx.al1)} | sem ${fmtSub(...D.ctx.al0)}`);
+      }
+    });
+
+    /* C) dupla -> 39 / 49 */
+    const duplas = [];
+    for (const [m, l] of mm) if (l.length === 2 && H[l[0]].n === 0 && H[l[1]].n === 0) duplas.push(m);
+    duplas.sort((a, b) => a - b);
+    const ev = [];
+    for (const M of duplas) {
+      if (M + 40 > ultMin) continue;
+      const w39 = dentro(M + 38, M + 40);
+      if (w39.length < 5) continue;
+      const e = { M, w39, hit39: w39.some((i) => H[i].n === 0), ctx: ctxEm(w39[0]) };
+      if (M + 50 <= ultMin) { const w49 = dentro(M + 48, M + 50); if (w49.length >= 5) { e.w49 = w49; e.hit49 = w49.some((i) => H[i].n === 0); } }
+      e.a29 = dentro(M + 29, M + 29).some((i) => H[i].n === 5);
+      e.a39 = dentro(M + 39, M + 39).some((i) => H[i].n === 5);
+      e.dentroAlerta = dentro(M + 29, M + 29).length >= 2;
+      ev.push(e);
+    }
+    const corteM = ev.length ? ev[Math.floor(ev.length / 2)].M : 0;
+    const recente = (e) => e.M >= corteM;
+    const cnt = (arr, f) => { let n = 0, h = 0; for (const e of arr) { const r = f(e); if (r === null || r === undefined) continue; n++; if (r) h++; } return [n, h]; };
+    const P6 = p0Branco(6);
+    const r39 = (e) => e.hit39;
+    const r49 = (e) => (!e.hit39 && e.hit49 !== undefined ? e.hit49 : null);
+    L.push('');
+    L.push('C) DOIS BRANCOS NO MESMO MINUTO -> BRANCO 39 MINUTOS DEPOIS (±1 min), SENÃO 49 MINUTOS DEPOIS (±1 min)');
+    L.push(`   Duplas no mesmo minuto encontradas: ${duplas.length} (analisadas com janela completa: ${ev.length})`);
+    const c39 = cnt(ev, r39);
+    L.push(`   Pagou na janela dos 39 (6 pedras): ${fmtTaxa(c39[0], c39[1], P6)}`);
+    L.push(`      metade antiga ${fmtSub(...cnt(ev.filter((e) => !recente(e)), r39))} | metade recente ${fmtSub(...cnt(ev.filter(recente), r39))}`);
+    const c49 = cnt(ev, r49);
+    L.push(`   Quando NÃO pagou aos 39, pagou na janela dos 49: ${fmtTaxa(c49[0], c49[1], P6)}  <- o "garantido" do dono`);
+    L.push(`      metade antiga ${fmtSub(...cnt(ev.filter((e) => !recente(e)), r49))} | metade recente ${fmtSub(...cnt(ev.filter(recente), r49))}`);
+    const c3949 = cnt(ev, (e) => (e.hit49 !== undefined ? e.hit39 || e.hit49 : null));
+    L.push(`   Pagou em 39 OU 49: ${fmtTaxa(c3949[0], c3949[1], 1 - (1 - P6) * (1 - P6))}`);
+    const rg = (nome, f) => {
+      const A = ev.filter((e) => f(e)), B = ev.filter((e) => !f(e));
+      L.push(`   ${nome}: aos 39 com ${fmtSub(...cnt(A, r39))} | sem ${fmtSub(...cnt(B, r39))}; aos 49 (se falhou aos 39) com ${fmtSub(...cnt(A, r49))} | sem ${fmtSub(...cnt(B, r49))}`);
+    };
+    rg('Com repetição na hora da janela', (e) => e.ctx.rep);
+    rg('Com pretas altas na hora da janela', (e) => e.ctx.altas);
+    rg('Com repetição E pretas altas (regime)', (e) => e.ctx.rep && e.ctx.altas);
+
+    /* D) pedra 5 vermelha 10 minutos antes */
+    L.push('');
+    L.push('D) PEDRA 5 VERMELHA 10 MINUTOS ANTES DO MINUTO-ALVO (alerta)');
+    const al = (nome, flag, alvo) => {
+      const base = ev.filter((e) => e.dentroAlerta && (alvo === 39 || (!e.hit39 && e.hit49 !== undefined)));
+      const r = (e) => (alvo === 39 ? e.hit39 : e.hit49);
+      L.push(`   ${nome}: com a pedra 5 ${fmtSub(...cnt(base.filter((e) => e[flag]), r))} | sem a pedra 5 ${fmtSub(...cnt(base.filter((e) => !e[flag]), r))} (acaso ${pc(P6)})`);
+    };
+    al('Janela dos 39 (alerta no minuto M+29)', 'a29', 39);
+    al('Janela dos 49, quando não pagou aos 39 (alerta no minuto M+39)', 'a39', 49);
+
+    /* E) sinais 12 e 11 dentro da janela dos 39 */
+    L.push('');
+    L.push('E) SINAIS 12 E 11 DENTRO DA JANELA DOS 39');
+    const a12 = [], a12b = [], a11 = [], a11n = [], a1211 = [];
+    for (const e of ev) {
+      const i12 = e.w39.find((i) => H[i].n === 12);
+      if (i12 !== undefined && i12 + 4 < N) {
+        const seg4 = [1, 2, 3, 4].map((x) => H[i12 + x]);
+        const ok4 = seg4.some((x) => x.n === 0);
+        a12.push(ok4);
+        if (!ok4 && e.hit49 !== undefined) a12b.push(e.hit49);
+        if (seg4.some((x) => x.n === 11)) a1211.push(ok4 ? true : (e.hit49 !== undefined ? e.hit49 : null));
+      }
+      if (!e.hit39 && e.hit49 !== undefined) {
+        if (e.w39.some((i) => H[i].n === 11)) a11.push(e.hit49); else a11n.push(e.hit49);
+      }
+    }
+    const f1 = (arr) => [arr.filter((x) => x !== null).length, arr.filter((x) => x === true).length];
+    L.push(`   Saiu 12 na janela dos 39 -> branco nas 4 pedras seguintes: ${fmtTaxa(...f1(a12), p0Branco(4))}`);
+    L.push(`   Saiu 12, não pagou em 4 pedras -> pagou na janela dos 49: ${fmtTaxa(...f1(a12b), P6)}`);
+    L.push(`   Saiu 11 na janela dos 39 e não pagou -> pagou aos 49: ${fmtTaxa(...f1(a11), P6)} | sem o 11: ${fmtSub(...f1(a11n))}`);
+    L.push(`   12 seguido de 11 em 4 pedras -> branco nas 4 pedras ou aos 49: ${fmtTaxa(...f1(a1211), 1 - Math.pow(14 / 15, 10))}`);
+    /* F) somas do branco (minuto do branco + valor das pedras vizinhas) */
+    L.push('');
+    L.push('F) SOMAS DO BRANCO (minuto do branco + pedras vizinhas; 10 a 14 viram 1 dígito: 13 = 1+3 = 4)');
+    const red = (n) => (n >= 10 ? Math.floor(n / 10) + (n % 10) : n);
+    const NOMES = ['frente 1', 'frente 2', 'frente 1+2', 'trás 1', 'trás 2', 'trás 1+2', 'as 4 juntas'];
+    const mkAgg = () => ({ ex: { n: 0, h: 0 }, tol: { n: 0, h: 0 } });
+    const AG = { W: NOMES.map(mkAgg), C: NOMES.map(mkAgg) };
+    const ANY = { W: mkAgg(), C: mkAgg() };
+    const AGcol = NOMES.map(mkAgg); const ANYcol = mkAgg();
+    const ANYm = { Wa: mkAgg(), Wb: mkAgg(), Wrep: mkAgg(), Wnrep: mkAgg(), Walt: mkAgg(), Wnalt: mkAgg() };
+    const branco = (a, b) => { // 1 se tem branco entre minutos a..b; null se incompleto
+      if (b > ultMin - 1) return null;
+      let c = 0, w = 0;
+      for (let m = a; m <= b; m++) { const l = mm.get(m); if (l) for (const x of l) { c++; if (H[x].n === 0) w = 1; } }
+      return c >= 2 * (b - a + 1) - 1 ? w : null;
+    };
+    for (let i = 2; i < N - 2; i++) {
+      if (SEG[i - 2] !== SEG[i + 2]) continue;
+      const eh = H[i].n === 0;
+      const T = Math.floor(H[i].t / MIN);
+      const difMin = (j) => Math.floor(H[j].t / MIN) !== T;
+      const colDif = eh && ((H[i - 1].n === 0 && difMin(i - 1)) || (H[i + 1].n === 0 && difMin(i + 1)));
+      const v = [red(H[i + 1].n), red(H[i + 2].n), 0, red(H[i - 1].n), red(H[i - 2].n), 0, 0];
+      v[2] = v[0] + v[1]; v[5] = v[3] + v[4]; v[6] = v[2] + v[5];
+      let anyEx = null, anyTol = null; let completo = true;
+      const ag = eh ? (colDif ? AGcol : AG.W) : AG.C;
+      for (let q = 0; q < 7; q++) {
+        const k = v[q]; if (k <= 0) continue;
+        const e = branco(T + k, T + k);
+        const tt = branco(Math.max(T + 1, T + k - 1), T + k + 1);
+        if (e === null || tt === null) { completo = false; continue; }
+        ag[q].ex.n++; ag[q].ex.h += e; ag[q].tol.n++; ag[q].tol.h += tt;
+        anyEx = anyEx || e; anyTol = anyTol || tt;
+      }
+      if (completo && anyEx !== null) {
+        const o = eh ? (colDif ? ANYcol : ANY.W) : ANY.C;
+        o.ex.n++; o.ex.h += anyEx; o.tol.n++; o.tol.h += anyTol;
+        if (eh && !colDif) {
+          const add = (x) => { x.ex.n++; x.ex.h += anyEx; x.tol.n++; x.tol.h += anyTol; };
+          add(i < N / 2 ? ANYm.Wa : ANYm.Wb);
+          const c = ctxEm(i);
+          add(c.rep ? ANYm.Wrep : ANYm.Wnrep); add(c.altas ? ANYm.Walt : ANYm.Wnalt);
+        }
+      }
+    }
+    const z2 = (a, b) => {
+      if (!a.n || !b.n) return 0;
+      const pc2 = (a.h + b.h) / (a.n + b.n); if (pc2 <= 0 || pc2 >= 1) return 0;
+      return (a.h / a.n - b.h / b.n) / Math.sqrt(pc2 * (1 - pc2) * (1 / a.n + 1 / b.n));
+    };
+    const linhaF = (nome, w, c) => `   ${nome}: brancos ${fmtSub(w.n, w.h)} | controle (pedras comuns) ${fmtSub(c.n, c.h)} | z=${z2(w, c).toFixed(1)}`;
+    L.push('   Horário exato (as 2 pedras do minuto da soma):');
+    NOMES.forEach((nm, q) => L.push(linhaF(nm, AG.W[q].ex, AG.C[q].ex)));
+    L.push(linhaF('QUALQUER das somas', ANY.W.ex, ANY.C.ex));
+    L.push('   Com 1 minuto de tolerância (6 pedras):');
+    NOMES.forEach((nm, q) => L.push(linhaF(nm, AG.W[q].tol, AG.C[q].tol)));
+    L.push(linhaF('QUALQUER das somas', ANY.W.tol, ANY.C.tol));
+    L.push(`   "QUALQUER" (horário exato) - metade antiga ${fmtSub(ANYm.Wa.ex.n, ANYm.Wa.ex.h)} | metade recente ${fmtSub(ANYm.Wb.ex.n, ANYm.Wb.ex.h)}`);
+    L.push(`   "QUALQUER" (horário exato) - com repetição ${fmtSub(ANYm.Wrep.ex.n, ANYm.Wrep.ex.h)} | sem ${fmtSub(ANYm.Wnrep.ex.n, ANYm.Wnrep.ex.h)} | com pretas altas ${fmtSub(ANYm.Walt.ex.n, ANYm.Walt.ex.h)} | sem ${fmtSub(ANYm.Wnalt.ex.n, ANYm.Wnalt.ex.h)}`);
+    L.push('   Brancos colados em MINUTOS DIFERENTES (fora das contas acima, só para observar):');
+    NOMES.forEach((nm, q) => { if (AGcol[q].ex.n) L.push(linhaF(nm + ' (exato)', AGcol[q].ex, AG.C[q].ex)); });
+    L.push(linhaF('QUALQUER (exato)', ANYcol.ex, ANY.C.ex));
+    L.push(linhaF('QUALQUER (com tolerância)', ANYcol.tol, ANY.C.tol));
+    L.push('   Controle = o MESMO cálculo feito a partir de pedras que não são branco. Se o branco não tem taxa maior que o controle, a soma não ajuda.');
+    L.push('   Com 7 horários e tolerância, "cair um branco em algum" acontece quase sempre por sorte: só vale a diferença para o controle.');
+    L.push('');
+    L.push('   Leitura: "acaso" é o que se esperaria num sorteio puro. Só vale se bater nas duas metades e com z alto');
+    L.push('   (z maior que ~3,4 = difícil de ser sorte, já descontando que muitas regras estão sendo testadas).');
+    return L;
+  }
+
+  /* ---------- observatório ao vivo: avisa na conversa quando uma regra do dono entra em ação ---------- */
+  const ativas = [];
+  const somas = [];
+  function vivoObs(i) {
+    const { n, t } = H[i];
+    const m = Math.floor(t / MIN);
+    if (n === 0 && i > 0 && H[i - 1].n === 0 && Math.floor(H[i - 1].t / MIN) === m && SEG[i - 1] === SEG[i] && !ativas.some((a) => a.M === m)) {
+      ativas.push({ M: m, w39: null, w49: null, al29: false, al39: false, s12: null, s11: false });
+      emitir('branco', `⚪⚪ Dupla no minuto ${hmin(m)} (os dois brancos no mesmo minuto). Janela dos 39: ${hmin(m + 38)} a ${hmin(m + 40)}. Janela dos 49: ${hmin(m + 48)} a ${hmin(m + 50)}. Alerta (pedra 5 vermelha) esperado às ${hmin(m + 29)}.`, t);
+    }
+    if (i >= 4 && H[i - 2].n === 0 && SEG[i - 4] === SEG[i] && !somas.some((x) => x.i === i - 2)) {
+      const red = (x) => (x >= 10 ? Math.floor(x / 10) + (x % 10) : x);
+      const j = i - 2, a = red(H[j + 1].n), b = red(H[j + 2].n), c = red(H[j - 1].n), d = red(H[j - 2].n);
+      const Tm = Math.floor(H[j].t / MIN);
+      const alvos = [['frente 1', a], ['frente 2', b], ['frente 1+2', a + b], ['trás 1', c], ['trás 2', d], ['trás 1+2', c + d], ['4 juntas', a + b + c + d]].filter((x) => x[1] > 0);
+      somas.push({ i: j, Tm, alvos });
+      const lista = alvos.map(([nm, k]) => `${hmin(Tm + k)} (${nm})`).join(', ');
+      const colDifV = (H[j - 1].n === 0 && Math.floor(H[j - 1].t / MIN) !== Tm) || (H[j + 1].n === 0 && Math.floor(H[j + 1].t / MIN) !== Tm);
+      emitir('estrat', `🧮 Somas do branco das ${hms(H[j].t)}${colDifV ? ' (colado em outro minuto: só observação)' : ''} [trás ${d} ${c} | frente ${a} ${b}]: ${lista}.`, t);
+    }
+    if (n === 0) {
+      for (const x of somas) {
+        for (const [nm, k] of x.alvos) {
+          if (x.Tm + k === m) emitir('ok', `✅ Branco às ${hms(t)} bateu com a soma "${nm}" do branco das ${hmin(x.Tm)}.`, t);
+        }
+      }
+    }
+    while (somas.length && m - somas[0].Tm > 60) somas.shift();
+    for (let q = ativas.length - 1; q >= 0; q--) {
+      const a = ativas[q]; const d = m - a.M;
+      if (d > 60) { ativas.splice(q, 1); continue; }
+      if (d === 29 && n === 5 && !a.al29) { a.al29 = true; emitir('chute', `🔔 Pedra 5 vermelha às ${hms(t)}: alerta de que o branco dos 39 (dupla de ${hmin(a.M)}) deve vir por volta de ${hmin(a.M + 39)}.`, t); }
+      if (d === 39 && n === 5 && !a.al39 && a.w39 !== 'hit') { a.al39 = true; emitir('chute', `🔔 Pedra 5 vermelha às ${hms(t)}: alerta para o branco dos 49 (dupla de ${hmin(a.M)}), por volta de ${hmin(a.M + 49)}.`, t); }
+      if (d >= 38 && d <= 40) {
+        if (n === 0 && a.w39 === null) { a.w39 = 'hit'; emitir('ok', `✅ Branco na janela dos 39 (dupla de ${hmin(a.M)}) às ${hms(t)}.`, t); }
+        if (n === 12 && a.w39 === null && !a.s12) { a.s12 = { i }; emitir('regime', `12 às ${hms(t)} na janela dos 39: segundo o dono, branco deve vir nas próximas 4 pedras.`, t); }
+        if (n === 11 && a.w39 === null && !a.s11) { a.s11 = true; emitir('info', `11 às ${hms(t)} na janela dos 39 (dupla de ${hmin(a.M)}).`, t); }
+      }
+      if (a.s12 && !a.s12.fim) {
+        const dist12 = i - a.s12.i;
+        if (dist12 > 0 && dist12 <= 4 && n === 0) { a.s12.fim = true; emitir('ok', `✅ Branco veio ${dist12} pedra(s) depois do 12.`, t); }
+        else if (dist12 === 4) { a.s12.fim = true; emitir('erro', '❌ O 12 não pagou nas 4 pedras seguintes. Pela regra, espera-se na janela dos 49.', t); }
+      }
+      if (d > 40 && a.w39 === null) { a.w39 = 'miss'; emitir('erro', `❌ Janela dos 39 NÃO pagou (dupla de ${hmin(a.M)}). Pela regra, vem na janela dos 49: ${hmin(a.M + 48)} a ${hmin(a.M + 50)}.`, t); }
+      if (d >= 48 && d <= 50 && a.w39 === 'miss' && a.w49 === null && n === 0) { a.w49 = 'hit'; emitir('ok', `✅ Branco na janela dos 49 (dupla de ${hmin(a.M)}) às ${hms(t)}.`, t); }
+      if (d > 50 && a.w39 === 'miss' && a.w49 === null) { a.w49 = 'miss'; emitir('erro', `❌ Janela dos 49 também NÃO pagou (dupla de ${hmin(a.M)}).`, t); }
+    }
+  }
+
   /* ---------- falas do cérebro sobre o que está vendo (só ao vivo) ---------- */
   function falar(f) {
     const t = f.t;
@@ -360,6 +635,7 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
       for (let k = a; k < b; k++) {
         const i = adicionarPedra(lista[k].n, lista[k].t);
         passo(i, k < split ? 'treino' : 'teste');
+        if (k >= N - 600) vivoObs(i);
         if (k >= ini) rodarEstrategias(i, lista[k].t + 25000, 'hist');
       }
       if (aoProgresso) aoProgresso(b / N);
@@ -395,6 +671,7 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
     if (H.length && st.t <= H[H.length - 1].t) return;
     const i = adicionarPedra(st.n, st.t);
     const f = passo(i, 'vivo');
+    vivoObs(i);
     falar(f);
     rodarEstrategias(i, Date.now(), 'vivo');
     if (Date.now() - ultResumo > 30 * MIN) resumo();
@@ -454,6 +731,9 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
       L.push(`- Sem branco há: ${f.secaMin === null ? '—' : `${Math.floor(f.secaMin)} min (${f.secaPed} pedras)`}`);
       L.push(`- Regime: repetição ${f.rep ? 'SIM' : 'não'} | pretas altas ${f.altasReg ? 'SIM' : 'não'}`);
     } else L.push('- ainda sem pedras');
+    L.push('');
+    L.push('OBSERVATÓRIO DO DONO (regras da Blaze)');
+    try { observatorio().forEach((x) => L.push(x)); } catch (e) { L.push('erro no observatório: ' + e.message); }
     L.push('');
     L.push('REGIMES APRENDIDOS (o cérebro testou várias definições)');
     const linhaC = (c, nome) => `  ${nome} -> treino: continua ${pc(c.tr.pCont)} (acaso ${pc(c.tr.pB)}, ${c.tr.nA} casos, z=${c.tr.z.toFixed(1)}) | teste: ${pc(c.te.pCont)} (acaso ${pc(c.te.pB)}, ${c.te.nA} casos, z=${c.te.z.toFixed(1)})`;

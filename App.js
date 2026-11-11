@@ -6,7 +6,7 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import * as Clipboard from 'expo-clipboard';
 import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
-import { iniciarFonte } from './fonte';
+import { iniciarFonte, reconectar } from './fonte';
 import { criarHistorico } from './historico';
 import { criarCerebro } from './cerebro';
 
@@ -139,6 +139,7 @@ export default function App() {
   const slotW = Math.floor((W - 24) / 10);
 
   const [conectado, setConectado] = useState(false);
+  const [voltando, setVoltando] = useState(false);
   const [stones, setStones] = useState([]);
   const [ultimoId, setUltimoId] = useState(0);
   const [linhas, setLinhas] = useState([]);
@@ -177,7 +178,7 @@ export default function App() {
     CER.iniciar(HIST.pedrasEntre(0, Infinity), (m) => { if (vivo) setProg(m || ''); }).then(() => { if (vivo) { setPronto(true); setProg(''); } });
 
     iniciarFonte({
-      onStatus: (v) => setConectado(v),
+      onStatus: (v) => { setConectado(v); if (v) setVoltando(false); },
       onInicial: (lst) => {
         let ultimo = null;
         const novos = [];
@@ -198,7 +199,7 @@ export default function App() {
     });
 
     const timer = setInterval(() => CER.salvar(), 20000);
-    const sub2 = AppState.addEventListener('change', (e) => { if (e !== 'active') CER.salvar(true); });
+    const sub2 = AppState.addEventListener('change', (e) => { if (e !== 'active') CER.salvar(true); else { setVoltando(true); reconectar(); setTimeout(() => setVoltando(false), 8000); } });
     return () => { vivo = false; off(); clearInterval(timer); sub2.remove(); CER.salvar(true); };
   }, []);
 
@@ -232,7 +233,7 @@ export default function App() {
           <Text style={{ color: txt, fontWeight: '900', fontSize: 18 }}>Cérebro</Text>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             {!pronto ? <Text style={{ color: sub, fontSize: 11, marginRight: 10 }}>{prog || 'carregando…'}</Text> : null}
-            <View pointerEvents="none" style={[st.led, { backgroundColor: conectado ? '#2ecc71' : '#ff3b30', shadowColor: conectado ? '#2ecc71' : '#ff3b30' }]} />
+            <View pointerEvents="none" style={[st.led, { backgroundColor: conectado ? '#2ecc71' : voltando ? '#ffb020' : '#ff3b30', shadowColor: conectado ? '#2ecc71' : voltando ? '#ffb020' : '#ff3b30' }]} />
           </View>
         </View>
 

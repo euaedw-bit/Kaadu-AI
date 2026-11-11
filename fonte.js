@@ -92,3 +92,10 @@ export function pararFonte() {
   limpar();
   if (cb) cb.onStatus(false);
 }
+
+// ao voltar para o app: reconecta na hora (o iPhone derruba a conexão quando o app vai para segundo plano)
+export function reconectar() {
+  if (!ativo) return;
+  tentativas = 0;
+  conectar();
+}
