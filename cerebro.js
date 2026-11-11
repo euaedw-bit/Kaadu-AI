@@ -929,6 +929,21 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
     return L;
   }
 
+  /* ---------- cobertura: quantas pedras de cada hora realmente chegaram (120 por hora) ---------- */
+  function cobertura(horas = 24) {
+    const N = H.length;
+    if (!N) return { pct: 0, total: 0, esperado: 0, horas: [] };
+    const off = new Date(H[N - 1].t).getTimezoneOffset() * MIN;
+    const hAtual = Math.floor((Date.now() - off) / 3600000);
+    const hPrim = Math.floor((H[0].t - off) / 3600000) + 1; // pula a primeira hora (começou no meio)
+    const hIni = Math.max(hAtual - horas, hPrim);
+    const mapa = new Map();
+    for (let i = N - 1; i >= 0; i--) { const hk = Math.floor((H[i].t - off) / 3600000); if (hk < hIni) break; mapa.set(hk, (mapa.get(hk) || 0) + 1); }
+    const hs = []; let total = 0, esperado = 0;
+    for (let hk = hIni; hk < hAtual; hk++) { const n = mapa.get(hk) || 0; hs.push({ t: hk * 3600000 + off, n }); total += n; esperado += 120; }
+    return { pct: esperado ? total / esperado : 0, total, esperado, horas: hs };
+  }
+
   /* ---------- falas do cérebro sobre o que está vendo (só ao vivo) ---------- */
   function falar(f) {
     const t = f.t;
@@ -1103,6 +1118,16 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
     L.push(`RELATÓRIO DO CÉREBRO - ${dmhms(Date.now())}`);
     L.push('');
     L.push(`Pedras analisadas: ${H.length}${H.length ? ` (de ${dmhms(H[0].t)} até ${dmhms(H[H.length - 1].t)})` : ''}`);
+    try {
+      const cb = cobertura(72);
+      if (cb.horas.length) {
+        L.push(`COBERTURA DAS PEDRAS (últimas ${cb.horas.length}h completas): ${cb.total} de ${cb.esperado} esperadas = ${pc(cb.pct)}. Cada hora deveria ter 120.`);
+        const furos = cb.horas.filter((h) => h.n < 115);
+        if (furos.length) L.push('   Horas incompletas: ' + furos.map((h) => { const d = new Date(h.t); return `${pad(d.getDate())}/${pad(d.getMonth() + 1)} ${pad(d.getHours())}h: ${h.n}/120`; }).join(' | '));
+        else L.push('   Nenhuma hora com buraco.');
+        if (cb.pct < 0.9) L.push('   ATENÇÃO: faltam muitas pedras (app em segundo plano, tela apagada ou mais de ~50 min sem conexão). Os resultados abaixo ficam menos confiáveis.');
+      }
+    } catch (e) {}
     L.push(`Hipóteses: ${HIP.length} | confirmadas ${cont['confirmada']} | promissoras ${cont['promissora']} | a observar ${cont['observar']} | sem evidência ${cont['sem evidência']}`);
     L.push(`Chutes ao vivo: ${placar.h} acertos em ${placar.n} (por acaso seriam ~${placar.esp.toFixed(1).replace('.', ',')})`);
     L.push('');
@@ -1169,7 +1194,7 @@ export function criarCerebro({ store, tag = 'cerebro' }) {
   }
 
   return {
-    iniciar, pedra, salvar, relatorio, conversaTexto,
+    cobertura, iniciar, pedra, salvar, relatorio, conversaTexto,
     linhas: () => LINHAS,
     aoLinha: (fn) => { ouvintes.add(fn); return () => ouvintes.delete(fn); },
     total: () => H.length,

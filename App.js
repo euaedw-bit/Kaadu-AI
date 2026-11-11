@@ -4,6 +4,7 @@ import {
   useColorScheme, Animated, Image, Settings, AppState, Alert, Share, FlatList,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import { useKeepAwake } from 'expo-keep-awake';
 import * as Clipboard from 'expo-clipboard';
 import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
 import { iniciarFonte, reconectar } from './fonte';
@@ -108,7 +109,7 @@ function PedrasPorHora({ dark, txt, sub }) {
             <Pressable onPress={() => setAbertas((o) => ({ ...o, [h.ini]: !o[h.ini] }))}>
               <Glass dark={dark} style={{ borderRadius: 12, padding: 12, flexDirection: 'row', justifyContent: 'space-between' }}>
                 <Text style={{ color: txt, fontWeight: '800' }}>{hm(h.ini)} – {hm(h.ini + 3600000)}</Text>
-                <Text style={{ color: sub, fontWeight: '600' }}>{h.ped.length} pedras · {brancos} brancos</Text>
+                <Text style={{ color: h.ped.length >= 115 ? sub : '#ffb020', fontWeight: '600' }}>{h.ped.length}/120 pedras · {brancos} brancos</Text>
               </Glass>
             </Pressable>
             {aberta && (
@@ -131,6 +132,7 @@ function PedrasPorHora({ dark, txt, sub }) {
 }
 
 export default function App() {
+  useKeepAwake(); // a tela não apaga enquanto o app está aberto
   const sys = useColorScheme();
   const dark = sys !== 'light';
   const { width: W, height: H } = useWindowDimensions();
@@ -149,6 +151,8 @@ export default function App() {
   const [aba, setAba] = useState('cerebro');
   const [relTxt, setRelTxt] = useState('');
   const [aviso, setAviso] = useState('');
+  const [filtro, setFiltro] = useState('tudo');
+  const [cob, setCob] = useState(null);
   const vistos = useRef(new Set());
   const seq = useRef(0);
   const lista = useRef(null);
@@ -170,10 +174,13 @@ export default function App() {
     // últimas 10 pedras guardadas
     const ult = HIST.pedrasEntre(Date.now() - 2 * 3600000, Infinity).slice(-11).map((p) => ({ id: ++seq.current, n: p.n, t: p.t }));
     setStones(ult);
-    setLinhas(CER.linhas().slice(-400));
+    setLinhas(CER.linhas().slice(-1500));
+    const atualizaCob = () => { try { if (vivo) setCob(CER.cobertura(24)); } catch (e) {} };
+    atualizaCob();
+    const tcob = setInterval(atualizaCob, 60000);
     const off = CER.aoLinha((l) => {
       if (!vivo) return;
-      setLinhas((a) => [...a.slice(-399), l]);
+      setLinhas((a) => [...a.slice(-1499), l]);
     });
     CER.iniciar(HIST.pedrasEntre(0, Infinity), (m) => { if (vivo) setProg(m || ''); }).then(() => { if (vivo) { setPronto(true); setProg(''); } });
 
@@ -200,7 +207,7 @@ export default function App() {
 
     const timer = setInterval(() => CER.salvar(), 20000);
     const sub2 = AppState.addEventListener('change', (e) => { if (e !== 'active') CER.salvar(true); else { setVoltando(true); reconectar(); setTimeout(() => setVoltando(false), 8000); } });
-    return () => { vivo = false; off(); clearInterval(timer); sub2.remove(); CER.salvar(true); };
+    return () => { vivo = false; off(); clearInterval(timer); clearInterval(tcob); sub2.remove(); CER.salvar(true); };
   }, []);
 
   const abrirRelatorio = () => {
@@ -213,7 +220,15 @@ export default function App() {
     try { await Share.share({ message: HIST.exportar() }); } catch (e) { avisar('Não deu para compartilhar'); }
   };
 
-  const itens = linhas.slice().reverse(); // mais nova em cima (lista invertida)
+  const ehChute = (l) => l.tipo === 'chute' || /Chute/.test(l.txt);
+  const ehDescoberta = (l) => l.tipo === 'descoberta' || l.tipo === 'resumo' || /^(📈|📉|🧬|🎓)/.test(l.txt);
+  const passa = (l) => {
+    if (filtro === 'tudo') return true;
+    if (filtro === 'chutes') return ehChute(l);
+    if (filtro === 'descobertas') return ehDescoberta(l);
+    return !ehChute(l) && !ehDescoberta(l) && ['estrat', 'branco', 'ok', 'erro', 'regime', 'info'].includes(l.tipo); // regras do dono
+  };
+  const itens = linhas.filter(passa).reverse(); // mais nova em cima (lista invertida)
 
   const renderLinha = ({ item }) => (
     <View style={{ paddingVertical: 5, flexDirection: 'row' }}>
@@ -230,7 +245,14 @@ export default function App() {
       </View>
       <SafeAreaView style={{ flex: 1 }}>
         <View style={st.topo}>
-          <Text style={{ color: txt, fontWeight: '900', fontSize: 18 }}>Cérebro</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Text style={{ color: txt, fontWeight: '900', fontSize: 18 }}>Cérebro</Text>
+            {cob ? (
+              <Pressable onPress={() => { setAba('pedras'); abrirRelatorio(); }} hitSlop={8}>
+                <Text style={{ marginLeft: 10, fontSize: 11, fontWeight: '800', color: cob.pct >= 0.95 ? '#2ecc71' : cob.pct >= 0.8 ? '#ffb020' : '#ff5a5f' }}>24h: {Math.round(cob.pct * 100)}% das pedras</Text>
+              </Pressable>
+            ) : null}
+          </View>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             {!pronto ? <Text style={{ color: sub, fontSize: 11, marginRight: 10 }}>{prog || 'carregando…'}</Text> : null}
             <View pointerEvents="none" style={[st.led, { backgroundColor: conectado ? '#2ecc71' : voltando ? '#ffb020' : '#ff3b30', shadowColor: conectado ? '#2ecc71' : voltando ? '#ffb020' : '#ff3b30' }]} />
@@ -240,7 +262,16 @@ export default function App() {
         <Text style={{ color: sub, textAlign: 'center', fontSize: 11, fontWeight: '800', marginBottom: 8, marginTop: 4 }}>ÚLTIMAS PEDRAS</Text>
         <Faixa pedras={stones} ultimoId={ultimoId} slotW={slotW} dark={dark} />
 
-        <Text style={{ color: sub, fontSize: 11, fontWeight: '800', marginTop: 14, marginBottom: 4, paddingHorizontal: 16 }}>O QUE O CÉREBRO ESTÁ PENSANDO</Text>
+        <Text style={{ color: sub, fontSize: 11, fontWeight: '800', marginTop: 14, marginBottom: 6, paddingHorizontal: 16 }}>O QUE O CÉREBRO ESTÁ PENSANDO</Text>
+        <View style={{ flexDirection: 'row', paddingHorizontal: 16, marginBottom: 6, flexWrap: 'wrap' }}>
+          {[['tudo', 'Tudo'], ['chutes', 'Chutes'], ['regras', 'Regras do dono'], ['descobertas', 'Descobertas']].map(([k, nome]) => (
+            <Pressable key={k} onPress={() => setFiltro(k)} style={{ marginRight: 6, marginBottom: 4 }}>
+              <Glass dark={dark} style={{ borderRadius: 14, paddingVertical: 5, paddingHorizontal: 12, opacity: filtro === k ? 1 : 0.5 }}>
+                <Text style={{ color: txt, fontWeight: '800', fontSize: 12 }}>{nome}</Text>
+              </Glass>
+            </Pressable>
+          ))}
+        </View>
         <FlatList
           ref={lista}
           data={itens}
@@ -290,6 +321,7 @@ export default function App() {
                 <View>
                   <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 10 }}>
                     <Pressable onPress={() => copiar(relTxt, 'Relatório copiado!')} style={st.mini}><Text style={st.miniTxt}>Copiar relatório</Text></Pressable>
+                    <Pressable onPress={() => { Share.share({ message: relTxt }).catch(() => {}); }} style={st.mini}><Text style={st.miniTxt}>Compartilhar relatório</Text></Pressable>
                     <Pressable onPress={() => copiar(CER.conversaTexto(), 'Conversa copiada!')} style={st.mini}><Text style={st.miniTxt}>Copiar conversa</Text></Pressable>
                     <Pressable onPress={() => { try { setRelTxt(CER.relatorio()); } catch (e) {} }} style={st.mini}><Text style={st.miniTxt}>Atualizar</Text></Pressable>
                   </View>
